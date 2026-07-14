@@ -339,10 +339,6 @@ Mystery Box</textarea>
 
 <script>
 (function () {
-  // Built-in key so anyone opening this page can translate immediately with no setup.
-  // Users can still override it with their own key via the settings gear icon.
-  const DEFAULT_API_KEY = 'AIzaSyA-zvyKoFz3MX5qrqgtIHShP5VMNTytG5g';
-
   const LANG_NAMES = {
     auto: 'Unspecified (auto-detect)',
     th: 'Thai',
@@ -397,7 +393,7 @@ Mystery Box</textarea>
 
   // ---------- Load saved settings ----------
   function loadSettings() {
-    apiKeyEl.value = localStorage.getItem('cabalTranslator.apiKey') || DEFAULT_API_KEY;
+    apiKeyEl.value = localStorage.getItem('cabalTranslator.apiKey') || '';
     modelEl.value = localStorage.getItem('cabalTranslator.model') || 'gemini-3.5-flash';
     glossaryTextEl.value = localStorage.getItem('cabalTranslator.glossary') || '';
     toneEl.value = localStorage.getItem('cabalTranslator.tone') || 'casual';
