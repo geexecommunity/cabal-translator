@@ -1,0 +1,732 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Cabal Translator - เครื่องมือแปลภาษาเกม Cabal</title>
+<style>
+  :root {
+    --bg: #f2f6fc;
+    --panel: #ffffff;
+    --panel2: #eef3fa;
+    --border: #dbe5f5;
+    --accent: #4f6bef;
+    --accent2: #22d3ee;
+    --text: #202a45;
+    --text-dim: #6b7590;
+    --ok: #10b981;
+    --warn: #e8ac5e;
+    --err: #ef4d5e;
+    --shadow: rgba(79, 107, 239, 0.18);
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: "Segoe UI", "Noto Sans Thai", Tahoma, sans-serif;
+    background: linear-gradient(160deg, #eef3fc, #eafbfb 55%, #f2f6fc 100%);
+    color: var(--text);
+    min-height: 100vh;
+    padding: 24px 16px 60px;
+  }
+  .container { max-width: 960px; margin: 0 auto; }
+  header { text-align: center; margin-bottom: 24px; }
+  header h1 {
+    margin: 0 0 6px;
+    font-size: 28px;
+    background: linear-gradient(90deg, #4f6bef, #22d3ee);
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+  }
+  header p { margin: 0; color: var(--text-dim); font-size: 14px; }
+
+  details.panel, section.panel {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 18px;
+    padding: 18px 20px;
+    margin-bottom: 18px;
+    box-shadow: 0 6px 20px var(--shadow);
+  }
+  details.panel summary {
+    cursor: pointer;
+    font-weight: 600;
+    font-size: 15px;
+    list-style: none;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  details.panel summary::-webkit-details-marker { display: none; }
+  details.panel summary::before { content: "▸"; transition: transform .15s; color: var(--accent); }
+  details[open].panel summary::before { transform: rotate(90deg); }
+  details.panel .panel-body { margin-top: 14px; }
+
+  h2 { font-size: 16px; margin: 0 0 4px; }
+  .hint { color: var(--text-dim); font-size: 12.5px; margin: 0 0 12px; line-height: 1.5; }
+
+  label.field { display: block; margin-bottom: 12px; font-size: 13px; color: var(--text-dim); }
+  label.field span.lbl { display: block; margin-bottom: 6px; }
+
+  input[type="text"], input[type="password"], select, textarea {
+    width: 100%;
+    background: var(--panel2);
+    border: 1px solid var(--border);
+    color: var(--text);
+    border-radius: 8px;
+    padding: 10px 12px;
+    font-size: 14px;
+    font-family: inherit;
+    outline: none;
+  }
+  input:focus, select:focus, textarea:focus { border-color: var(--accent); }
+  textarea { resize: vertical; min-height: 120px; line-height: 1.5; }
+  textarea#glossaryText { min-height: 100px; font-family: Consolas, monospace; font-size: 12.5px; }
+  textarea#inputText, textarea#outputText { min-height: 220px; font-family: Consolas, "Noto Sans Thai", monospace; font-size: 13.5px; }
+
+  .row { display: flex; gap: 14px; flex-wrap: wrap; }
+  .row > label.field { flex: 1; min-width: 160px; }
+
+  button {
+    cursor: pointer;
+    border: none;
+    border-radius: 999px;
+    padding: 10px 20px;
+    font-size: 14px;
+    font-weight: 600;
+    font-family: inherit;
+    transition: transform .12s, box-shadow .12s;
+  }
+  button:hover { transform: translateY(-1px); }
+  .btn-primary { background: linear-gradient(90deg, var(--accent), var(--accent2)); color: white; box-shadow: 0 4px 14px var(--shadow); }
+  .btn-primary:disabled { opacity: 0.5; cursor: not-allowed; transform: none; }
+  .btn-secondary { background: var(--panel2); color: var(--text); border: 1px solid var(--border); }
+  .btn-row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-top: 10px; }
+
+  .swap-btn {
+    align-self: flex-end;
+    margin-bottom: 12px;
+    background: var(--panel2);
+    border: 1px solid var(--border);
+    color: var(--accent);
+    width: 42px;
+    height: 42px;
+    border-radius: 8px;
+    font-size: 16px;
+  }
+
+  #status { font-size: 13px; margin-top: 10px; min-height: 18px; }
+  #status.ok { color: var(--ok); }
+  #status.err { color: var(--err); }
+  #status.busy { color: var(--warn); }
+
+  .output-wrap { position: relative; margin-top: 8px; }
+  .glossary-count { font-size: 12px; color: var(--text-dim); margin-top: 8px; }
+  footer { text-align: center; color: var(--text-dim); font-size: 12px; margin-top: 30px; }
+  code { background: var(--panel2); padding: 1px 5px; border-radius: 4px; font-size: 12px; }
+
+  .settings-fab {
+    position: fixed;
+    top: 18px;
+    right: 18px;
+    width: 46px;
+    height: 46px;
+    border-radius: 50%;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    box-shadow: 0 4px 14px var(--shadow);
+    font-size: 20px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    z-index: 60;
+  }
+  .modal-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(20, 30, 60, 0.4);
+    display: flex;
+    align-items: flex-start;
+    justify-content: center;
+    padding: 50px 16px;
+    z-index: 100;
+    overflow-y: auto;
+  }
+  .modal-overlay.hidden { display: none; }
+  .modal-content { max-width: 640px; width: 100%; }
+  .modal-header-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 14px;
+  }
+  .modal-header-row h2 {
+    margin: 0;
+    color: #fff;
+    font-size: 20px;
+    text-shadow: 0 1px 6px rgba(0,0,0,0.25);
+  }
+  .modal-close-btn { background: var(--panel); }
+</style>
+</head>
+<body>
+<div class="container">
+  <button type="button" class="settings-fab" id="openSettingsBtn" title="ตั้งค่าเครื่องมือ">⚙️</button>
+
+  <header>
+    <h1>🎮 Cabal Translator</h1>
+    <p id="apiStatusBadge" style="display:none;" title="คลิกเพื่อเปิดการตั้งค่า"></p>
+  </header>
+
+  <div class="modal-overlay hidden" id="settingsModal">
+  <div class="modal-content">
+  <div class="modal-header-row">
+    <h2>⚙️ ตั้งค่าเครื่องมือ</h2>
+    <button type="button" class="btn-secondary modal-close-btn" id="closeSettingsBtn">ปิด ✕</button>
+  </div>
+
+  <details class="panel" id="settingsPanel" open>
+    <summary>⚙️ ตั้งค่า API (Google Gemini)</summary>
+    <div class="panel-body">
+      <p class="hint">ต้องใช้ API key ของ Gemini (Google) เพื่อให้เครื่องมือนี้แปลภาษาได้จริง — ขอฟรีได้ที่ <code>aistudio.google.com</code> → API Keys → Create API Key หรือถ้ามี Google Cloud Project อยู่แล้ว ใช้คีย์จาก <code>console.cloud.google.com/apis/credentials</code> ได้เลย (ต้องเปิดใช้งาน "Generative Language API" ในโปรเจกต์นั้นก่อน ที่เมนู APIs &amp; Services → Library) เนื่องจากไฟล์นี้ทำงานอยู่ในเบราว์เซอร์ของคุณเอง คีย์จะถูกเก็บไว้ในเบราว์เซอร์เครื่องนี้เท่านั้น (localStorage) ไม่ถูกส่งไปที่ใดนอกจาก generativelanguage.googleapis.com โดยตรง</p>
+      <label class="field">
+        <span class="lbl">Gemini API Key</span>
+        <input type="password" id="apiKey" placeholder="AIza...">
+      </label>
+      <label class="field">
+        <span class="lbl">โมเดล</span>
+        <select id="model">
+          <option value="gemini-3.5-flash" selected>gemini-3.5-flash (แนะนำ รุ่นใหม่ล่าสุด เร็ว)</option>
+          <option value="gemini-2.5-flash">gemini-2.5-flash (สมดุลคุณภาพ/ความเร็ว/ราคา)</option>
+          <option value="gemini-3-pro-preview">gemini-3-pro-preview (คุณภาพสูงสุด ช้ากว่า/แพงกว่า)</option>
+          <option value="gemini-2.0-flash">gemini-2.0-flash (เร็ว/ประหยัดสุด)</option>
+        </select>
+      </label>
+      <div class="btn-row">
+        <button class="btn-primary" id="saveSettingsBtn">บันทึกการตั้งค่า</button>
+        <span id="settingsStatus" style="font-size:13px;color:var(--text-dim);"></span>
+      </div>
+    </div>
+  </details>
+
+  <details class="panel" id="glossaryPanel">
+    <summary>📚 คลังคำศัพท์เฉพาะเกม (Glossary)</summary>
+    <div class="panel-body">
+      <p class="hint">
+        ใส่ชื่อไอเทม / ชื่อกิจกรรม / ชื่อคลาส ฯลฯ ที่แปลไว้แต่ละภาษา เพื่อให้การแปลใช้คำที่ตรงกันทุกครั้ง<br>
+        รองรับไฟล์ <code>.csv</code> (แถวแรกเป็นหัวคอลัมน์ เช่น <code>term,th,en,ph,id</code>) หรือ <code>.json</code> (array ของ object) — อัปโหลดไฟล์ของคุณได้เลย หรือพิมพ์/วางลงในช่องด้านล่างโดยตรง
+      </p>
+      <label class="field">
+        <span class="lbl">อัปโหลดไฟล์คลังคำศัพท์ (.csv / .json / .txt)</span>
+        <input type="file" id="glossaryFile" accept=".csv,.json,.txt">
+      </label>
+      <label class="field">
+        <span class="lbl">เนื้อหาคลังคำศัพท์ (CSV หรือ JSON)</span>
+        <textarea id="glossaryText" placeholder="term,th,en,ph,id&#10;Health Potion,ยาฟื้นฟูเลือด,Health Potion,Health Potion,Health Potion"></textarea>
+      </label>
+      <div class="btn-row">
+        <button class="btn-primary" id="saveGlossaryBtn">บันทึกคลังคำศัพท์</button>
+        <button class="btn-secondary" id="clearGlossaryBtn">ล้างคลังคำศัพท์</button>
+        <span id="glossaryStatus" style="font-size:13px;color:var(--text-dim);"></span>
+      </div>
+      <div class="glossary-count" id="glossaryCount"></div>
+    </div>
+  </details>
+
+  <details class="panel" id="protectPanel">
+    <summary>🚫 คำ/คอลัมน์ที่ห้ามแปล</summary>
+    <div class="panel-body">
+      <p class="hint">
+        รายการคำเฉพาะของเกม (proper noun) ที่ต้องคงไว้เหมือนต้นฉบับเป๊ะๆ ไม่ต้องแปล เช่น ชื่อไอเทม ชื่อระบบ ชื่อกล่อง — พิมพ์คำละ 1 บรรทัด หรืออัปโหลดไฟล์รายชื่อทั้งหมดได้เลย (รองรับรายการหลักพันคำ ระบบจะเลือกเฉพาะคำที่พบในข้อความจริงมาใส่ตอนแปล จึงไม่ทำให้พรอมป์ยาวเกินไป)<br>
+        ถ้าเนื้อหาเป็น HTML ที่มีตาราง (&lt;table&gt;) สามารถระบุ "ชื่อคอลัมน์" ที่ต้องคงค่าดั้งเดิมไว้ทั้งคอลัมน์ได้ด้วย (คั่นด้วยจุลภาค)
+      </p>
+      <label class="field">
+        <span class="lbl">อัปโหลดไฟล์รายชื่อที่ห้ามแปล (.txt / .csv — 1 ชื่อต่อบรรทัด)</span>
+        <input type="file" id="protectedTermsFile" accept=".txt,.csv">
+      </label>
+      <label class="field">
+        <span class="lbl">คำเฉพาะที่ห้ามแปล (1 คำต่อบรรทัด)</span>
+        <textarea id="protectedTerms" placeholder="Force Gem&#10;Random Box&#10;Mystery Box">Force Gem
+Random Box
+Mystery Box</textarea>
+      </label>
+      <div class="glossary-count" id="protectedTermsCount"></div>
+      <label class="field">
+        <span class="lbl">คอลัมน์ตาราง (HTML) ที่ห้ามแปล — คั่นด้วยจุลภาค</span>
+        <input type="text" id="protectedColumns" value="Item Name, Rank, Item Need, Dungeon Name, Event Name">
+      </label>
+      <div class="btn-row">
+        <button class="btn-primary" id="saveProtectedBtn">บันทึกรายการ</button>
+        <button class="btn-secondary" id="clearProtectedBtn">ล้างรายการ</button>
+        <span id="protectedStatus" style="font-size:13px;color:var(--text-dim);"></span>
+      </div>
+    </div>
+  </details>
+
+  </div>
+  </div>
+
+  <section class="panel">
+    <h2>แปลภาษา</h2>
+    <p class="hint">เลือกรูปแบบข้อความและภาษาต้นทาง/ปลายทาง แล้ววางข้อความหรือโค้ด HTML ที่ต้องการแปล</p>
+
+    <div class="row">
+      <label class="field">
+        <span class="lbl">รูปแบบข้อความ</span>
+        <select id="inputType">
+          <option value="text">ข้อความธรรมดา (Plain Text)</option>
+          <option value="html">โค้ด HTML</option>
+        </select>
+      </label>
+      <label class="field">
+        <span class="lbl">จากภาษา</span>
+        <select id="sourceLang">
+          <option value="auto">ตรวจจับอัตโนมัติ</option>
+          <option value="th">ไทย (Thai)</option>
+          <option value="en" selected>อังกฤษ (English)</option>
+          <option value="ph">ฟิลิปปินส์ / ตากาล็อก (Filipino)</option>
+          <option value="id">อินโดนีเซีย (Indonesian)</option>
+        </select>
+      </label>
+      <button type="button" class="swap-btn" id="swapBtn" title="สลับภาษาต้นทาง/ปลายทาง">⇄</button>
+      <label class="field">
+        <span class="lbl">เป็นภาษา</span>
+        <select id="targetLang">
+          <option value="th" selected>ไทย (Thai)</option>
+          <option value="en">อังกฤษ (English)</option>
+          <option value="ph">ฟิลิปปินส์ / ตากาล็อก (Filipino)</option>
+          <option value="id">อินโดนีเซีย (Indonesian)</option>
+        </select>
+      </label>
+    </div>
+
+    <div class="row">
+      <label class="field">
+        <span class="lbl">โทนภาษา</span>
+        <select id="tone">
+          <option value="casual" selected>ทั่วไป — เป็นกันเองแบบเกมเมอร์ (General/Casual)</option>
+          <option value="announcement">ทางการ — ประกาศสำคัญ (Formal Announcement)</option>
+          <option value="formal">ทางการ — แพตช์โน้ต/ข่าวประกาศ (Formal Patch Notes/News)</option>
+        </select>
+      </label>
+    </div>
+
+    <label class="field">
+      <span class="lbl">ข้อความต้นฉบับ</span>
+      <textarea id="inputText" placeholder="วางข้อความหรือโค้ด HTML ที่นี่..."></textarea>
+    </label>
+
+    <div class="btn-row">
+      <button class="btn-primary" id="translateBtn">🌐 แปลภาษา</button>
+      <button class="btn-secondary" id="clearInputBtn">ล้างข้อความ</button>
+    </div>
+    <div id="status"></div>
+
+    <label class="field" style="margin-top:16px;">
+      <span class="lbl">ผลลัพธ์การแปล</span>
+      <div class="output-wrap">
+        <textarea id="outputText" readonly placeholder="ผลลัพธ์จะแสดงที่นี่..."></textarea>
+      </div>
+    </label>
+    <div class="btn-row">
+      <button class="btn-secondary" id="copyBtn">📋 คัดลอกผลลัพธ์</button>
+    </div>
+  </section>
+
+  <footer>Cabal Translator · ใช้ Gemini API ของคุณเอง · ทำงานทั้งหมดในเบราว์เซอร์เครื่องนี้</footer>
+</div>
+
+<script>
+(function () {
+  const LANG_NAMES = {
+    auto: 'Unspecified (auto-detect)',
+    th: 'Thai',
+    en: 'English',
+    ph: 'Filipino (Tagalog)',
+    id: 'Indonesian'
+  };
+
+  const el = (id) => document.getElementById(id);
+  const apiKeyEl = el('apiKey');
+  const modelEl = el('model');
+  const glossaryTextEl = el('glossaryText');
+  const glossaryFileEl = el('glossaryFile');
+  const glossaryCountEl = el('glossaryCount');
+  const toneEl = el('tone');
+  const protectedTermsEl = el('protectedTerms');
+  const protectedColumnsEl = el('protectedColumns');
+  const protectedTermsFileEl = el('protectedTermsFile');
+  const protectedTermsCountEl = el('protectedTermsCount');
+  const inputTypeEl = el('inputType');
+  const sourceLangEl = el('sourceLang');
+  const targetLangEl = el('targetLang');
+  const inputTextEl = el('inputText');
+  const outputTextEl = el('outputText');
+  const statusEl = el('status');
+  const translateBtn = el('translateBtn');
+  const apiStatusBadgeEl = el('apiStatusBadge');
+  const settingsModalEl = el('settingsModal');
+
+  function openSettingsModal() { settingsModalEl.classList.remove('hidden'); }
+  function closeSettingsModal() { settingsModalEl.classList.add('hidden'); }
+
+  el('openSettingsBtn').addEventListener('click', openSettingsModal);
+  el('closeSettingsBtn').addEventListener('click', closeSettingsModal);
+  apiStatusBadgeEl.addEventListener('click', openSettingsModal);
+  settingsModalEl.addEventListener('click', function (e) {
+    if (e.target === settingsModalEl) closeSettingsModal();
+  });
+  document.addEventListener('keydown', function (e) {
+    if (e.key === 'Escape') closeSettingsModal();
+  });
+
+  function updateApiStatusBadge() {
+    if (apiKeyEl.value.trim()) {
+      apiStatusBadgeEl.textContent = '✅ ตั้งค่า API แล้ว พร้อมใช้งาน (' + modelEl.value + ')';
+      apiStatusBadgeEl.style.color = 'var(--ok)';
+    } else {
+      apiStatusBadgeEl.textContent = '⚠️ ยังไม่ได้ใส่ Gemini API Key — เปิดแผง "ตั้งค่า API" ด้านล่างเพื่อใส่ครั้งเดียว จากนั้นจะจำให้อัตโนมัติทุกครั้งที่เปิดไฟล์นี้';
+      apiStatusBadgeEl.style.color = 'var(--warn)';
+    }
+  }
+
+  // ---------- Load saved settings ----------
+  function loadSettings() {
+    apiKeyEl.value = localStorage.getItem('cabalTranslator.apiKey') || '';
+    modelEl.value = localStorage.getItem('cabalTranslator.model') || 'gemini-3.5-flash';
+    glossaryTextEl.value = localStorage.getItem('cabalTranslator.glossary') || '';
+    toneEl.value = localStorage.getItem('cabalTranslator.tone') || 'casual';
+    const savedTerms = localStorage.getItem('cabalTranslator.protectedTerms');
+    if (savedTerms !== null) protectedTermsEl.value = savedTerms;
+    const savedCols = localStorage.getItem('cabalTranslator.protectedColumns');
+    if (savedCols !== null) protectedColumnsEl.value = savedCols;
+    updateGlossaryCount();
+    updateProtectedTermsCount();
+    updateApiStatusBadge();
+  }
+  loadSettings();
+
+  // Auto-save API key/model as soon as you leave the field, so you never have to
+  // remember to press "บันทึกการตั้งค่า" — it's saved the moment you type it in.
+  apiKeyEl.addEventListener('blur', function () {
+    localStorage.setItem('cabalTranslator.apiKey', apiKeyEl.value.trim());
+    updateApiStatusBadge();
+  });
+  modelEl.addEventListener('change', function () {
+    localStorage.setItem('cabalTranslator.model', modelEl.value);
+    updateApiStatusBadge();
+  });
+
+  toneEl.addEventListener('change', function () {
+    localStorage.setItem('cabalTranslator.tone', toneEl.value);
+  });
+
+  function updateProtectedTermsCount() {
+    const terms = (protectedTermsEl.value || '').split(/\r?\n/).map(s => s.trim()).filter(Boolean);
+    protectedTermsCountEl.textContent = terms.length > 0 ? `คำที่ห้ามแปลอยู่ในรายการ: ${terms.length} คำ` : 'ยังไม่มีคำในรายการ';
+  }
+  protectedTermsEl.addEventListener('input', updateProtectedTermsCount);
+
+  protectedTermsFileEl.addEventListener('change', function (e) {
+    const file = e.target.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = function (evt) {
+      let text = evt.target.result;
+      // If it's a CSV, take the first column of each line as the term
+      if (file.name.toLowerCase().endsWith('.csv')) {
+        text = text.split(/\r?\n/).map(line => parseCSVLine(line)[0] || '').join('\n');
+      }
+      protectedTermsEl.value = text;
+      updateProtectedTermsCount();
+      el('protectedStatus').textContent = 'โหลดไฟล์แล้ว (กด "บันทึกรายการ" เพื่อจัดเก็บถาวร)';
+    };
+    reader.readAsText(file, 'UTF-8');
+  });
+
+  el('saveProtectedBtn').addEventListener('click', function () {
+    localStorage.setItem('cabalTranslator.protectedTerms', protectedTermsEl.value);
+    localStorage.setItem('cabalTranslator.protectedColumns', protectedColumnsEl.value);
+    el('protectedStatus').textContent = 'บันทึกแล้ว ✓';
+    setTimeout(() => { el('protectedStatus').textContent = ''; }, 2500);
+  });
+
+  el('clearProtectedBtn').addEventListener('click', function () {
+    if (!confirm('ล้างรายการคำที่ห้ามแปลทั้งหมด?')) return;
+    protectedTermsEl.value = '';
+    localStorage.removeItem('cabalTranslator.protectedTerms');
+    updateProtectedTermsCount();
+  });
+
+  el('saveSettingsBtn').addEventListener('click', function () {
+    localStorage.setItem('cabalTranslator.apiKey', apiKeyEl.value.trim());
+    localStorage.setItem('cabalTranslator.model', modelEl.value);
+    updateApiStatusBadge();
+    el('settingsStatus').textContent = 'บันทึกแล้ว ✓ ครั้งต่อไปเปิดไฟล์นี้จะกรอกให้อัตโนมัติ';
+    setTimeout(() => { el('settingsStatus').textContent = ''; }, 3500);
+  });
+
+  el('saveGlossaryBtn').addEventListener('click', function () {
+    localStorage.setItem('cabalTranslator.glossary', glossaryTextEl.value);
+    el('glossaryStatus').textContent = 'บันทึกแล้ว ✓';
+    updateGlossaryCount();
+    setTimeout(() => { el('glossaryStatus').textContent = ''; }, 2500);
+  });
+
+  el('clearGlossaryBtn').addEventListener('click', function () {
+    if (!confirm('ล้างคลังคำศัพท์ทั้งหมด?')) return;
+    glossaryTextEl.value = '';
+    localStorage.removeItem('cabalTranslator.glossary');
+    updateGlossaryCount();
+  });
+
+  glossaryFileEl.addEventListener('change', function (e) {
+    const file = e.target.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = function (evt) {
+      glossaryTextEl.value = evt.target.result;
+      updateGlossaryCount();
+      el('glossaryStatus').textContent = 'โหลดไฟล์แล้ว (กด "บันทึกคลังคำศัพท์" เพื่อจัดเก็บถาวร)';
+    };
+    reader.readAsText(file, 'UTF-8');
+  });
+
+  el('swapBtn').addEventListener('click', function () {
+    if (sourceLangEl.value === 'auto') return;
+    const s = sourceLangEl.value, t = targetLangEl.value;
+    sourceLangEl.value = t;
+    targetLangEl.value = s;
+  });
+
+  el('clearInputBtn').addEventListener('click', function () {
+    inputTextEl.value = '';
+    outputTextEl.value = '';
+    setStatus('', '');
+  });
+
+  el('copyBtn').addEventListener('click', function () {
+    if (!outputTextEl.value) return;
+    navigator.clipboard.writeText(outputTextEl.value).then(function () {
+      const btn = el('copyBtn');
+      const original = btn.textContent;
+      btn.textContent = '✓ คัดลอกแล้ว';
+      setTimeout(() => { btn.textContent = original; }, 1500);
+    });
+  });
+
+  // ---------- Glossary parsing ----------
+  function parseCSVLine(line) {
+    const result = [];
+    let cur = '', inQuotes = false;
+    for (let i = 0; i < line.length; i++) {
+      const c = line[i];
+      if (inQuotes) {
+        if (c === '"') {
+          if (line[i + 1] === '"') { cur += '"'; i++; } else { inQuotes = false; }
+        } else { cur += c; }
+      } else {
+        if (c === '"') inQuotes = true;
+        else if (c === ',') { result.push(cur); cur = ''; }
+        else cur += c;
+      }
+    }
+    result.push(cur);
+    return result.map(s => s.trim());
+  }
+
+  function parseGlossary(text) {
+    text = (text || '').trim();
+    if (!text) return [];
+    // Try JSON first
+    if (text[0] === '[' || text[0] === '{') {
+      try {
+        const json = JSON.parse(text);
+        if (Array.isArray(json)) {
+          return json.filter(r => r && typeof r === 'object');
+        } else if (typeof json === 'object') {
+          return Object.entries(json).map(([k, v]) => {
+            if (typeof v === 'object') return Object.assign({ term: k }, v);
+            return { term: k, value: v };
+          });
+        }
+      } catch (e) { /* fall through to CSV */ }
+    }
+    // CSV parsing
+    const lines = text.split(/\r?\n/).filter(l => l.trim().length > 0);
+    if (lines.length === 0) return [];
+    const headers = parseCSVLine(lines[0]).map(h => h.trim());
+    const rows = [];
+    for (let i = 1; i < lines.length; i++) {
+      const cells = parseCSVLine(lines[i]);
+      const row = {};
+      headers.forEach((h, idx) => { row[h || ('col' + idx)] = cells[idx] !== undefined ? cells[idx] : ''; });
+      rows.push(row);
+    }
+    return rows;
+  }
+
+  function updateGlossaryCount() {
+    const rows = parseGlossary(glossaryTextEl.value);
+    glossaryCountEl.textContent = rows.length > 0 ? `คำศัพท์ที่โหลดอยู่: ${rows.length} รายการ` : 'ยังไม่มีคำศัพท์ในคลัง';
+  }
+  glossaryTextEl.addEventListener('input', updateGlossaryCount);
+
+  function buildGlossarySection(inputText) {
+    const rows = parseGlossary(glossaryTextEl.value);
+    if (rows.length === 0) return '';
+    const MAX_ROWS = 500;
+    const hay = (inputText || '').toLowerCase();
+    let relevant = rows.filter(r => Object.values(r).some(v => v && hay.includes(String(v).toLowerCase())));
+    // If the glossary is small, just use the whole thing even without an exact match (covers short/odd inputs)
+    if (relevant.length === 0 && rows.length <= MAX_ROWS) relevant = rows;
+    if (relevant.length === 0) return '';
+    const truncated = relevant.length > MAX_ROWS;
+    const used = relevant.slice(0, MAX_ROWS);
+    const lines = used.map(r => Object.entries(r).map(([k, v]) => `${k}: ${v}`).join(' | '));
+    let section = '\n\n### คลังคำศัพท์เฉพาะเกม Cabal ที่เกี่ยวข้องกับข้อความนี้ (อ้างอิงบังคับ)\nเมื่อพบคำหรือชื่อที่ตรงกับรายการด้านล่าง ให้ใช้คำแปลตามที่กำหนดไว้เสมอ ห้ามแปลเองใหม่:\n' + lines.join('\n');
+    if (truncated) section += `\n(...พบคำที่ตรงกันอีก ${relevant.length - MAX_ROWS} รายการที่ถูกตัดออกเนื่องจากยาวเกินไป)`;
+    return section;
+  }
+
+  // ---------- Translation ----------
+  function setStatus(msg, cls) {
+    statusEl.textContent = msg;
+    statusEl.className = cls || '';
+  }
+
+  function buildSystemPrompt(inputType, sourceLang, targetLang, tone, inputText) {
+    const srcName = LANG_NAMES[sourceLang];
+    const tgtName = LANG_NAMES[targetLang];
+    const isHtml = inputType === 'html';
+
+    let toneInstruction;
+    if (tone === 'announcement') {
+      toneInstruction = `Use a courteous, professional tone appropriate for an official company announcement to players (e.g. server status updates, clarifications on results/rules, policy reminders, important notices) in ${tgtName}. Write as "the team" addressing players collectively and respectfully — clear, concise, and reassuring, not stiff or bureaucratic. Keep it easy to understand for everyday players (a touch of gamer-friendly warmth is fine), use emoji sparingly and only where the source does, and preserve any closing thank-you notes, brand taglines (e.g. slogans repeated in the source), or hashtags exactly as structured in the source.`;
+    } else if (tone === 'formal') {
+      toneInstruction = `Use a modern, formal tone matching the vocabulary style commonly found in official game patch notes, event notices, and news articles in ${tgtName} — structured, precise, and detailed (e.g. numbered steps, exact dates/times with timezone, terms and conditions), consistent with professional game publisher communications.`;
+    } else {
+      toneInstruction = `Use natural, casual phrasing that real Cabal Online players in the ${tgtName}-speaking gamer community would actually use and instantly understand — not a stiff, literal, or overly formal translation.`;
+    }
+
+    let prompt = `You are a professional localization translator for the MMORPG "Cabal Online". `;
+    prompt += `Translate the user's ${isHtml ? 'HTML content' : 'plain text'} `;
+    prompt += sourceLang === 'auto' ? `(source language unspecified, detect it automatically) ` : `from ${srcName} `;
+    prompt += `into ${tgtName}.\n\n`;
+    prompt += `Rules:\n`;
+    prompt += `1. ${toneInstruction}\n`;
+    prompt += `2. Keep game-specific proper nouns (item names, event names, class/job names, dungeon names, currency names, etc.) consistent with how players in the target-language community commonly refer to them. If a glossary is provided below, you MUST follow it exactly for any matching term.\n`;
+    if (isHtml) {
+      prompt += `3. This is HTML. Do NOT alter the HTML structure, tags, attributes, classes, ids, or inline styles in any way. Only translate the human-visible text content (including alt/title attribute text meant for display, if present). Return the complete HTML with the same structure, just with the visible text translated.\n`;
+    } else {
+      prompt += `3. Preserve line breaks, punctuation style, and any placeholder tokens (e.g. {0}, %s, [item], <color>) exactly as-is — do not translate or remove them.\n`;
+    }
+    prompt += `4. Output ONLY the translated result. No explanations, no notes, no markdown code fences, no preamble.\n`;
+    prompt += `5. Ensure the translation is precise and consistent, and that all original formatting is preserved exactly.\n`;
+
+    const allProtectedTerms = (protectedTermsEl.value || '').split(/\r?\n/).map(s => s.trim()).filter(Boolean);
+    if (allProtectedTerms.length > 0) {
+      const MAX_TERMS = 500;
+      const hayLower = (inputText || '').toLowerCase();
+      let matchedTerms = allProtectedTerms.filter(t => hayLower.includes(t.toLowerCase()));
+      if (matchedTerms.length === 0 && allProtectedTerms.length <= MAX_TERMS) matchedTerms = allProtectedTerms;
+      const truncatedTerms = matchedTerms.length > MAX_TERMS;
+      const usedTerms = matchedTerms.slice(0, MAX_TERMS);
+      if (usedTerms.length > 0) {
+        prompt += `\n6. Throughout the entire document, do NOT translate the following game-specific or unique proper nouns found in this text — keep them exactly as written, including any bracketed terms that immediately follow them:\n`;
+        prompt += usedTerms.map(t => `- ${t}`).join('\n') + '\n';
+        if (truncatedTerms) prompt += `(...and ${matchedTerms.length - MAX_TERMS} more matching terms omitted for brevity)\n`;
+      }
+      prompt += `Also do not translate any other clearly game-specific, branded, system, item, or box names that are not common vocabulary, even if not explicitly listed above.\n`;
+    }
+
+    if (isHtml) {
+      const protectedCols = (protectedColumnsEl.value || '').split(',').map(s => s.trim()).filter(Boolean);
+      if (protectedCols.length > 0) {
+        prompt += `\n7. If the content contains HTML tables (<table>...</table>), do NOT translate the text inside the following columns — keep their content exactly as in the source, including any bracketed terms that appear after item names: ${protectedCols.join(', ')}. Translate the content of all other columns normally.\n`;
+      }
+    }
+
+    prompt += buildGlossarySection(inputText);
+    return prompt;
+  }
+
+  async function translate() {
+    const apiKey = apiKeyEl.value.trim();
+    const model = modelEl.value;
+    const inputType = inputTypeEl.value;
+    const sourceLang = sourceLangEl.value;
+    const targetLang = targetLangEl.value;
+    const input = inputTextEl.value;
+
+    if (!apiKey) {
+      setStatus('⚠️ กรุณาใส่ Gemini API Key ในส่วน "ตั้งค่า API" ก่อน', 'err');
+      el('settingsPanel').open = true;
+      openSettingsModal();
+      return;
+    }
+    if (!input.trim()) {
+      setStatus('⚠️ กรุณาใส่ข้อความที่ต้องการแปล', 'err');
+      return;
+    }
+    if (sourceLang !== 'auto' && sourceLang === targetLang) {
+      setStatus('⚠️ ภาษาต้นทางและปลายทางเหมือนกัน', 'err');
+      return;
+    }
+
+    translateBtn.disabled = true;
+    setStatus('⏳ กำลังแปล...', 'busy');
+    outputTextEl.value = '';
+
+    const systemPrompt = buildSystemPrompt(inputType, sourceLang, targetLang, toneEl.value, input);
+
+    try {
+      const url = 'https://generativelanguage.googleapis.com/v1beta/models/' + encodeURIComponent(model) + ':generateContent';
+      const resp = await fetch(url, {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          'x-goog-api-key': apiKey
+        },
+        body: JSON.stringify({
+          system_instruction: { parts: [{ text: systemPrompt }] },
+          contents: [{ role: 'user', parts: [{ text: input }] }],
+          generationConfig: { maxOutputTokens: 8192, temperature: 0.3 }
+        })
+      });
+
+      const data = await resp.json();
+
+      if (!resp.ok) {
+        const msg = (data && data.error && data.error.message) ? data.error.message : JSON.stringify(data);
+        throw new Error(msg);
+      }
+
+      const candidate = (data.candidates || [])[0];
+      const finishReason = candidate && candidate.finishReason;
+      const parts = (candidate && candidate.content && candidate.content.parts) || [];
+      const textOut = parts.map(p => p.text || '').join('');
+
+      if (!textOut.trim()) {
+        if (finishReason === 'SAFETY' || finishReason === 'RECITATION') {
+          throw new Error('Gemini ปฏิเสธการแปลข้อความนี้ (finishReason: ' + finishReason + ') ลองปรับข้อความหรือแบ่งเป็นส่วนย่อยแล้วลองใหม่');
+        }
+        throw new Error('ไม่ได้รับผลลัพธ์จาก Gemini (finishReason: ' + (finishReason || 'unknown') + ')');
+      }
+
+      outputTextEl.value = textOut.trim();
+      setStatus('✅ แปลเสร็จแล้ว', 'ok');
+    } catch (err) {
+      console.error(err);
+      setStatus('❌ เกิดข้อผิดพลาด: ' + err.message, 'err');
+    } finally {
+      translateBtn.disabled = false;
+    }
+  }
+
+  translateBtn.addEventListener('click', translate);
+})();
+</script>
+</body>
+</html>
