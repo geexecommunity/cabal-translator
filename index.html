@@ -623,6 +623,174 @@ Mystery Box</textarea>
     return prompt;
   }
 
+  // ---------- Auto-chunking for long content ----------
+  // Netlify Functions have a hard execution time limit, and very long HTML/text
+  // can make Gemini take too long to respond. Instead of asking the user to split
+  // content manually, we split it ourselves behind the scenes and stitch the
+  // translated pieces back together, so "แปลภาษา" always works with one click.
+  const MAX_CHUNK_CHARS = 3000;
+
+  function serializeNodes(nodes) {
+    const div = document.createElement('div');
+    nodes.forEach(n => div.appendChild(n.cloneNode(true)));
+    return div.innerHTML;
+  }
+
+  function nodeOuterLength(node) {
+    return node.nodeType === 1 ? node.outerHTML.length : (node.textContent || '').length;
+  }
+
+  // Splits an HTML fragment into an ordered list of chunk strings to send to the API,
+  // plus a "plan" describing how to stitch the translated results back together.
+  function chunkHtmlForTranslation(html, maxChars) {
+    const parser = new DOMParser();
+    const doc = parser.parseFromString(html, 'text/html');
+    const topNodes = Array.from(doc.body.childNodes);
+    const chunks = [];
+    const plan = [];
+
+    let current = [];
+    let currentLen = 0;
+    function flushPlain() {
+      if (current.length) {
+        chunks.push(serializeNodes(current));
+        plan.push({ type: 'plain' });
+        current = [];
+        currentLen = 0;
+      }
+    }
+
+    topNodes.forEach((node, idx) => {
+      const len = nodeOuterLength(node);
+
+      if (node.nodeType === 1 && node.tagName === 'TABLE' && len > maxChars) {
+        flushPlain();
+        const theadEl = node.querySelector(':scope > thead');
+        const tbodyEl = node.querySelector(':scope > tbody');
+        const rows = tbodyEl ? Array.from(tbodyEl.children) : Array.from(node.querySelectorAll(':scope > tr'));
+        const tableOpenAttrs = node.cloneNode(false).outerHTML; // e.g. <table class="...">...</table> (empty)
+        const tableId = 'tbl-' + idx + '-' + Math.random().toString(36).slice(2, 7);
+
+        let group = [];
+        let groupLen = theadEl ? theadEl.outerHTML.length : 0;
+        let isFirstGroup = true;
+        function pushGroup() {
+          if (!group.length) return;
+          const tbl = document.createElement('table');
+          if (isFirstGroup && theadEl) tbl.appendChild(theadEl.cloneNode(true));
+          const tbody = document.createElement('tbody');
+          group.forEach(r => tbody.appendChild(r.cloneNode(true)));
+          tbl.appendChild(tbody);
+          chunks.push(tbl.outerHTML);
+          plan.push({ type: 'tableRows', tableId, isFirst: isFirstGroup, tableOpenAttrs });
+          isFirstGroup = false;
+          group = [];
+          groupLen = 0;
+        }
+        rows.forEach(row => {
+          const rLen = row.outerHTML.length;
+          if (groupLen + rLen > maxChars && group.length) pushGroup();
+          group.push(row);
+          groupLen += rLen;
+        });
+        pushGroup();
+      } else if (currentLen + len > maxChars && current.length) {
+        flushPlain();
+        current.push(node);
+        currentLen = len;
+      } else {
+        current.push(node);
+        currentLen += len;
+      }
+    });
+    flushPlain();
+
+    return { chunks, plan };
+  }
+
+  function reassembleHtmlChunks(translatedChunks, plan) {
+    let out = '';
+    let i = 0;
+    while (i < plan.length) {
+      const p = plan[i];
+      if (p.type === 'plain') {
+        out += translatedChunks[i];
+        i++;
+        continue;
+      }
+      const tableId = p.tableId;
+      let thead = '';
+      let rowsHtml = '';
+      const tableOpenAttrs = p.tableOpenAttrs;
+      while (i < plan.length && plan[i].type === 'tableRows' && plan[i].tableId === tableId) {
+        const frag = document.createElement('div');
+        frag.innerHTML = translatedChunks[i];
+        const tbl = frag.querySelector('table');
+        if (tbl) {
+          const th = tbl.querySelector('thead');
+          if (th && plan[i].isFirst) thead = th.outerHTML;
+          const tb = tbl.querySelector('tbody');
+          if (tb) rowsHtml += tb.innerHTML;
+          else Array.from(tbl.children).forEach(c => { if (c.tagName !== 'THEAD') rowsHtml += c.outerHTML; });
+        } else {
+          rowsHtml += translatedChunks[i];
+        }
+        i++;
+      }
+      out += tableOpenAttrs.replace(/<\/table>\s*$/i, thead + '<tbody>' + rowsHtml + '</tbody></table>');
+    }
+    return out;
+  }
+
+  // Splits plain text into paragraph-based chunks under maxChars, keeping paragraphs intact.
+  function chunkPlainText(text, maxChars) {
+    const paras = text.split(/\n{2,}/);
+    const chunks = [];
+    let current = '';
+    paras.forEach(p => {
+      const candidate = current ? current + '\n\n' + p : p;
+      if (candidate.length > maxChars && current) {
+        chunks.push(current);
+        current = p;
+      } else {
+        current = candidate;
+      }
+    });
+    if (current) chunks.push(current);
+    return chunks.length ? chunks : [text];
+  }
+
+  async function callTranslateApi(model, systemPrompt, input) {
+    // Calls our own Netlify serverless function, which holds the Gemini API key
+    // server-side (env var) so it's never sent to the browser or visible in page source.
+    const resp = await fetch('/.netlify/functions/translate', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ model, systemPrompt, input })
+    });
+
+    const data = await resp.json();
+
+    if (!resp.ok) {
+      const msg = (data && data.error && data.error.message) ? data.error.message : (data && data.error) ? data.error : JSON.stringify(data);
+      throw new Error(msg);
+    }
+
+    const candidate = (data.candidates || [])[0];
+    const finishReason = candidate && candidate.finishReason;
+    const parts = (candidate && candidate.content && candidate.content.parts) || [];
+    const textOut = parts.map(p => p.text || '').join('');
+
+    if (!textOut.trim()) {
+      if (finishReason === 'SAFETY' || finishReason === 'RECITATION') {
+        throw new Error('Gemini ปฏิเสธการแปลข้อความนี้ (finishReason: ' + finishReason + ') ลองปรับข้อความหรือแบ่งเป็นส่วนย่อยแล้วลองใหม่');
+      }
+      throw new Error('ไม่ได้รับผลลัพธ์จาก Gemini (finishReason: ' + (finishReason || 'unknown') + ')');
+    }
+
+    return textOut.trim();
+  }
+
   async function translate() {
     const model = modelEl.value;
     const inputType = inputTypeEl.value;
@@ -640,40 +808,34 @@ Mystery Box</textarea>
     }
 
     translateBtn.disabled = true;
-    setStatus('⏳ กำลังแปล...', 'busy');
     outputTextEl.value = '';
 
+    // Build the system prompt once from the FULL original text so glossary/protected-term
+    // matching considers the whole document, then reuse it for every chunk.
     const systemPrompt = buildSystemPrompt(inputType, sourceLang, targetLang, toneEl.value, input);
 
     try {
-      // Calls our own Netlify serverless function, which holds the Gemini API key
-      // server-side (env var) so it's never sent to the browser or visible in page source.
-      const resp = await fetch('/.netlify/functions/translate', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ model, systemPrompt, input })
-      });
-
-      const data = await resp.json();
-
-      if (!resp.ok) {
-        const msg = (data && data.error && data.error.message) ? data.error.message : (data && data.error) ? data.error : JSON.stringify(data);
-        throw new Error(msg);
-      }
-
-      const candidate = (data.candidates || [])[0];
-      const finishReason = candidate && candidate.finishReason;
-      const parts = (candidate && candidate.content && candidate.content.parts) || [];
-      const textOut = parts.map(p => p.text || '').join('');
-
-      if (!textOut.trim()) {
-        if (finishReason === 'SAFETY' || finishReason === 'RECITATION') {
-          throw new Error('Gemini ปฏิเสธการแปลข้อความนี้ (finishReason: ' + finishReason + ') ลองปรับข้อความหรือแบ่งเป็นส่วนย่อยแล้วลองใหม่');
+      if (input.length <= MAX_CHUNK_CHARS) {
+        setStatus('⏳ กำลังแปล...', 'busy');
+        const textOut = await callTranslateApi(model, systemPrompt, input);
+        outputTextEl.value = textOut;
+      } else if (inputType === 'html') {
+        const { chunks, plan } = chunkHtmlForTranslation(input, MAX_CHUNK_CHARS);
+        const translated = [];
+        for (let i = 0; i < chunks.length; i++) {
+          setStatus(`⏳ กำลังแปล... (${i + 1}/${chunks.length} ท่อน)`, 'busy');
+          translated.push(await callTranslateApi(model, systemPrompt, chunks[i]));
         }
-        throw new Error('ไม่ได้รับผลลัพธ์จาก Gemini (finishReason: ' + (finishReason || 'unknown') + ')');
+        outputTextEl.value = reassembleHtmlChunks(translated, plan);
+      } else {
+        const chunks = chunkPlainText(input, MAX_CHUNK_CHARS);
+        const translated = [];
+        for (let i = 0; i < chunks.length; i++) {
+          setStatus(`⏳ กำลังแปล... (${i + 1}/${chunks.length} ท่อน)`, 'busy');
+          translated.push(await callTranslateApi(model, systemPrompt, chunks[i]));
+        }
+        outputTextEl.value = translated.join('\n\n');
       }
-
-      outputTextEl.value = textOut.trim();
       setStatus('✅ แปลเสร็จแล้ว', 'ok');
     } catch (err) {
       console.error(err);
