@@ -234,7 +234,8 @@
     <div class="panel-body">
       <p class="hint">
         รายการคำเฉพาะของเกม (proper noun) ที่ต้องคงไว้เหมือนต้นฉบับเป๊ะๆ ไม่ต้องแปล เช่น ชื่อไอเทม ชื่อระบบ ชื่อกล่อง — พิมพ์คำละ 1 บรรทัด หรืออัปโหลดไฟล์รายชื่อทั้งหมดได้เลย (รองรับรายการหลักพันคำ ระบบจะเลือกเฉพาะคำที่พบในข้อความจริงมาใส่ตอนแปล จึงไม่ทำให้พรอมป์ยาวเกินไป)<br>
-        ถ้าเนื้อหาเป็น HTML ที่มีตาราง (&lt;table&gt;) สามารถระบุ "ชื่อคอลัมน์" ที่ต้องคงค่าดั้งเดิมไว้ทั้งคอลัมน์ได้ด้วย (คั่นด้วยจุลภาค)
+        ถ้าเนื้อหาเป็น HTML ที่มีตาราง (&lt;table&gt;) สามารถระบุ "ชื่อคอลัมน์" ที่ต้องคงค่าดั้งเดิมไว้ทั้งคอลัมน์ได้ด้วย (คั่นด้วยจุลภาค)<br>
+        <strong>หมายเหตุ:</strong> แท็กไลน์แคปชั่นบางประโยค เช่น "Claim Your Glory, Be the True King" และ "RISE OF THE TRUE KING" ถูกตั้งให้ไม่แปลไว้เป็นค่าเริ่มต้นในระบบแล้ว ไม่ว่าจะแปลจาก/เป็นภาษาใดก็ตาม
       </p>
       <label class="field">
         <span class="lbl">อัปโหลดไฟล์รายชื่อที่ห้ามแปล (.txt / .csv — 1 ชื่อต่อบรรทัด)</span>
@@ -619,8 +620,27 @@ Mystery Box</textarea>
       }
     }
 
+    prompt += buildAlwaysProtectedSection(inputText);
     prompt += buildGlossarySection(inputText);
     return prompt;
+  }
+
+  // ---------- Always-protected taglines/slogans ----------
+  // Certain fixed marketing lines (e.g. campaign footers/banners) should NEVER be
+  // translated, regardless of which language the user is translating from/to.
+  // This is separate from the user-editable "protected terms" list so it always
+  // applies without needing to be configured per session.
+  const ALWAYS_PROTECTED_PHRASES = [
+    'Claim Your Glory, Be the True King',
+    'RISE OF THE TRUE KING'
+  ];
+
+  function buildAlwaysProtectedSection(inputText) {
+    const hay = (inputText || '').toLowerCase();
+    const matched = ALWAYS_PROTECTED_PHRASES.filter(p => hay.includes(p.toLowerCase()));
+    if (matched.length === 0) return '';
+    return `\n8. The following tagline/slogan phrases must NEVER be translated, no matter the source or target language — keep them verbatim, exactly as written in the original (usually English), wherever they appear (e.g. as a footer, banner, caption closing line, or hashtag-style line):\n` +
+      matched.map(t => `- "${t}"`).join('\n') + '\n';
   }
 
   // ---------- Auto-chunking for long content ----------
