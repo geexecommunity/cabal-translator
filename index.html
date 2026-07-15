@@ -780,35 +780,80 @@ Mystery Box</textarea>
     return chunks.length ? chunks : [text];
   }
 
-  async function callTranslateApi(model, systemPrompt, input) {
+  function sleep(ms) {
+    return new Promise(resolve => setTimeout(resolve, ms));
+  }
+
+  // Parses a Gemini "...Please retry in 12.3s" style message and returns whole seconds.
+  function parseRetryAfterSeconds(msg) {
+    const m = /retry in ([\d.]+)\s*s/i.exec(msg || '');
+    return m ? Math.ceil(parseFloat(m[1])) : null;
+  }
+
+  // Builds a status-update callback for callTranslateApi's auto-retry, prefixed with
+  // whatever chunk-progress label is currently relevant (e.g. "(2/5 ท่อน) ").
+  function makeRetryHandler(prefix) {
+    return function (info) {
+      if (info.type === 'overload') {
+        setStatus(`⏳ ${prefix}โมเดลมีผู้ใช้งานเยอะ (high demand) กำลังลองใหม่อัตโนมัติ (${info.attempt}/${info.max})...`, 'busy');
+      } else if (info.type === 'quota') {
+        setStatus(`⏳ ${prefix}เกินโควต้าการใช้งานชั่วคราว กำลังรอ ${info.waitSec} วินาทีแล้วลองใหม่อัตโนมัติ...`, 'busy');
+      }
+    };
+  }
+
+  async function callTranslateApi(model, systemPrompt, input, onRetry) {
     // Calls our own Netlify serverless function, which holds the Gemini API key
     // server-side (env var) so it's never sent to the browser or visible in page source.
-    const resp = await fetch('/.netlify/functions/translate', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ model, systemPrompt, input })
-    });
+    // Automatically retries on transient Gemini errors:
+    //  - 503 "model overloaded / high demand" -> a few short exponential-backoff retries
+    //  - 429 "quota exceeded" -> a single retry after the exact wait time Gemini reports
+    const OVERLOAD_DELAYS_MS = [2000, 4000, 8000];
+    let quotaRetried = false;
 
-    const data = await resp.json();
+    for (let attempt = 0; ; attempt++) {
+      const resp = await fetch('/.netlify/functions/translate', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ model, systemPrompt, input })
+      });
 
-    if (!resp.ok) {
-      const msg = (data && data.error && data.error.message) ? data.error.message : (data && data.error) ? data.error : JSON.stringify(data);
-      throw new Error(msg);
-    }
+      const data = await resp.json();
 
-    const candidate = (data.candidates || [])[0];
-    const finishReason = candidate && candidate.finishReason;
-    const parts = (candidate && candidate.content && candidate.content.parts) || [];
-    const textOut = parts.map(p => p.text || '').join('');
+      if (!resp.ok) {
+        const msg = (data && data.error && data.error.message) ? data.error.message : (data && data.error) ? data.error : JSON.stringify(data);
+        const isOverloaded = resp.status === 503 || /overloaded|high demand|unavailable/i.test(msg);
+        const isQuota = resp.status === 429 || /quota exceeded/i.test(msg);
 
-    if (!textOut.trim()) {
-      if (finishReason === 'SAFETY' || finishReason === 'RECITATION') {
-        throw new Error('Gemini ปฏิเสธการแปลข้อความนี้ (finishReason: ' + finishReason + ') ลองปรับข้อความหรือแบ่งเป็นส่วนย่อยแล้วลองใหม่');
+        if (isOverloaded && attempt < OVERLOAD_DELAYS_MS.length) {
+          if (onRetry) onRetry({ type: 'overload', attempt: attempt + 1, max: OVERLOAD_DELAYS_MS.length });
+          await sleep(OVERLOAD_DELAYS_MS[attempt]);
+          continue;
+        }
+        if (isQuota && !quotaRetried) {
+          const waitSec = Math.min(parseRetryAfterSeconds(msg) || 30, 59) + 1;
+          quotaRetried = true;
+          if (onRetry) onRetry({ type: 'quota', waitSec });
+          await sleep(waitSec * 1000);
+          continue;
+        }
+        throw new Error(msg);
       }
-      throw new Error('ไม่ได้รับผลลัพธ์จาก Gemini (finishReason: ' + (finishReason || 'unknown') + ')');
-    }
 
-    return textOut.trim();
+      const candidate = (data.candidates || [])[0];
+      const finishReason = candidate && candidate.finishReason;
+      const parts = (candidate && candidate.content && candidate.content.parts) || [];
+      const textOut = parts.map(p => p.text || '').join('');
+
+      if (!textOut.trim()) {
+        if (finishReason === 'SAFETY' || finishReason === 'RECITATION') {
+          throw new Error('Gemini ปฏิเสธการแปลข้อความนี้ (finishReason: ' + finishReason + ') ลองปรับข้อความหรือแบ่งเป็นส่วนย่อยแล้วลองใหม่');
+        }
+        throw new Error('ไม่ได้รับผลลัพธ์จาก Gemini (finishReason: ' + (finishReason || 'unknown') + ')');
+      }
+
+      return textOut.trim();
+    }
   }
 
   async function translate() {
@@ -837,14 +882,14 @@ Mystery Box</textarea>
     try {
       if (input.length <= MAX_CHUNK_CHARS) {
         setStatus('⏳ กำลังแปล...', 'busy');
-        const textOut = await callTranslateApi(model, systemPrompt, input);
+        const textOut = await callTranslateApi(model, systemPrompt, input, makeRetryHandler(''));
         outputTextEl.value = textOut;
       } else if (inputType === 'html') {
         const { chunks, plan } = chunkHtmlForTranslation(input, MAX_CHUNK_CHARS);
         const translated = [];
         for (let i = 0; i < chunks.length; i++) {
           setStatus(`⏳ กำลังแปล... (${i + 1}/${chunks.length} ท่อน)`, 'busy');
-          translated.push(await callTranslateApi(model, systemPrompt, chunks[i]));
+          translated.push(await callTranslateApi(model, systemPrompt, chunks[i], makeRetryHandler(`(${i + 1}/${chunks.length} ท่อน) `)));
         }
         outputTextEl.value = reassembleHtmlChunks(translated, plan);
       } else {
@@ -852,7 +897,7 @@ Mystery Box</textarea>
         const translated = [];
         for (let i = 0; i < chunks.length; i++) {
           setStatus(`⏳ กำลังแปล... (${i + 1}/${chunks.length} ท่อน)`, 'busy');
-          translated.push(await callTranslateApi(model, systemPrompt, chunks[i]));
+          translated.push(await callTranslateApi(model, systemPrompt, chunks[i], makeRetryHandler(`(${i + 1}/${chunks.length} ท่อน) `)));
         }
         outputTextEl.value = translated.join('\n\n');
       }
