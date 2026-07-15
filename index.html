@@ -176,7 +176,6 @@
 
   <header>
     <h1>🎮 Cabal Translator</h1>
-    <p id="apiStatusBadge" style="display:none;" title="คลิกเพื่อเปิดการตั้งค่า"></p>
   </header>
 
   <div class="modal-overlay hidden" id="settingsModal">
@@ -187,13 +186,9 @@
   </div>
 
   <details class="panel" id="settingsPanel" open>
-    <summary>⚙️ ตั้งค่า API (Google Gemini)</summary>
+    <summary>⚙️ ตั้งค่า</summary>
     <div class="panel-body">
-      <p class="hint">ต้องใช้ API key ของ Gemini (Google) เพื่อให้เครื่องมือนี้แปลภาษาได้จริง — ขอฟรีได้ที่ <code>aistudio.google.com</code> → API Keys → Create API Key หรือถ้ามี Google Cloud Project อยู่แล้ว ใช้คีย์จาก <code>console.cloud.google.com/apis/credentials</code> ได้เลย (ต้องเปิดใช้งาน "Generative Language API" ในโปรเจกต์นั้นก่อน ที่เมนู APIs &amp; Services → Library) เนื่องจากไฟล์นี้ทำงานอยู่ในเบราว์เซอร์ของคุณเอง คีย์จะถูกเก็บไว้ในเบราว์เซอร์เครื่องนี้เท่านั้น (localStorage) ไม่ถูกส่งไปที่ใดนอกจาก generativelanguage.googleapis.com โดยตรง</p>
-      <label class="field">
-        <span class="lbl">Gemini API Key</span>
-        <input type="password" id="apiKey" placeholder="AIza...">
-      </label>
+      <p class="hint">เครื่องมือนี้เชื่อมต่อ Gemini ให้อัตโนมัติผ่านเซิร์ฟเวอร์กลางของทีมอยู่แล้ว ไม่ต้องใส่ API key เอง — เลือกโมเดลที่ต้องการได้เลย</p>
       <label class="field">
         <span class="lbl">โมเดล</span>
         <select id="model">
@@ -334,7 +329,7 @@ Mystery Box</textarea>
     </div>
   </section>
 
-  <footer>Cabal Translator · ใช้ Gemini API ของคุณเอง · ทำงานทั้งหมดในเบราว์เซอร์เครื่องนี้</footer>
+  <footer>Cabal Translator · เชื่อมต่อ Gemini ผ่านเซิร์ฟเวอร์กลางของทีมโดยอัตโนมัติ</footer>
 </div>
 
 <script>
@@ -348,7 +343,6 @@ Mystery Box</textarea>
   };
 
   const el = (id) => document.getElementById(id);
-  const apiKeyEl = el('apiKey');
   const modelEl = el('model');
   const glossaryTextEl = el('glossaryText');
   const glossaryFileEl = el('glossaryFile');
@@ -365,7 +359,6 @@ Mystery Box</textarea>
   const outputTextEl = el('outputText');
   const statusEl = el('status');
   const translateBtn = el('translateBtn');
-  const apiStatusBadgeEl = el('apiStatusBadge');
   const settingsModalEl = el('settingsModal');
 
   function openSettingsModal() { settingsModalEl.classList.remove('hidden'); }
@@ -373,7 +366,6 @@ Mystery Box</textarea>
 
   el('openSettingsBtn').addEventListener('click', openSettingsModal);
   el('closeSettingsBtn').addEventListener('click', closeSettingsModal);
-  apiStatusBadgeEl.addEventListener('click', openSettingsModal);
   settingsModalEl.addEventListener('click', function (e) {
     if (e.target === settingsModalEl) closeSettingsModal();
   });
@@ -381,19 +373,8 @@ Mystery Box</textarea>
     if (e.key === 'Escape') closeSettingsModal();
   });
 
-  function updateApiStatusBadge() {
-    if (apiKeyEl.value.trim()) {
-      apiStatusBadgeEl.textContent = '✅ ตั้งค่า API แล้ว พร้อมใช้งาน (' + modelEl.value + ')';
-      apiStatusBadgeEl.style.color = 'var(--ok)';
-    } else {
-      apiStatusBadgeEl.textContent = '⚠️ ยังไม่ได้ใส่ Gemini API Key — เปิดแผง "ตั้งค่า API" ด้านล่างเพื่อใส่ครั้งเดียว จากนั้นจะจำให้อัตโนมัติทุกครั้งที่เปิดไฟล์นี้';
-      apiStatusBadgeEl.style.color = 'var(--warn)';
-    }
-  }
-
   // ---------- Load saved settings ----------
   function loadSettings() {
-    apiKeyEl.value = localStorage.getItem('cabalTranslator.apiKey') || '';
     modelEl.value = localStorage.getItem('cabalTranslator.model') || 'gemini-3.5-flash';
     glossaryTextEl.value = localStorage.getItem('cabalTranslator.glossary') || '';
     toneEl.value = localStorage.getItem('cabalTranslator.tone') || 'casual';
@@ -403,19 +384,11 @@ Mystery Box</textarea>
     if (savedCols !== null) protectedColumnsEl.value = savedCols;
     updateGlossaryCount();
     updateProtectedTermsCount();
-    updateApiStatusBadge();
   }
   loadSettings();
 
-  // Auto-save API key/model as soon as you leave the field, so you never have to
-  // remember to press "บันทึกการตั้งค่า" — it's saved the moment you type it in.
-  apiKeyEl.addEventListener('blur', function () {
-    localStorage.setItem('cabalTranslator.apiKey', apiKeyEl.value.trim());
-    updateApiStatusBadge();
-  });
   modelEl.addEventListener('change', function () {
     localStorage.setItem('cabalTranslator.model', modelEl.value);
-    updateApiStatusBadge();
   });
 
   toneEl.addEventListener('change', function () {
@@ -460,9 +433,7 @@ Mystery Box</textarea>
   });
 
   el('saveSettingsBtn').addEventListener('click', function () {
-    localStorage.setItem('cabalTranslator.apiKey', apiKeyEl.value.trim());
     localStorage.setItem('cabalTranslator.model', modelEl.value);
-    updateApiStatusBadge();
     el('settingsStatus').textContent = 'บันทึกแล้ว ✓ ครั้งต่อไปเปิดไฟล์นี้จะกรอกให้อัตโนมัติ';
     setTimeout(() => { el('settingsStatus').textContent = ''; }, 3500);
   });
@@ -653,19 +624,12 @@ Mystery Box</textarea>
   }
 
   async function translate() {
-    const apiKey = apiKeyEl.value.trim();
     const model = modelEl.value;
     const inputType = inputTypeEl.value;
     const sourceLang = sourceLangEl.value;
     const targetLang = targetLangEl.value;
     const input = inputTextEl.value;
 
-    if (!apiKey) {
-      setStatus('⚠️ กรุณาใส่ Gemini API Key ในส่วน "ตั้งค่า API" ก่อน', 'err');
-      el('settingsPanel').open = true;
-      openSettingsModal();
-      return;
-    }
     if (!input.trim()) {
       setStatus('⚠️ กรุณาใส่ข้อความที่ต้องการแปล', 'err');
       return;
@@ -682,24 +646,18 @@ Mystery Box</textarea>
     const systemPrompt = buildSystemPrompt(inputType, sourceLang, targetLang, toneEl.value, input);
 
     try {
-      const url = 'https://generativelanguage.googleapis.com/v1beta/models/' + encodeURIComponent(model) + ':generateContent';
-      const resp = await fetch(url, {
+      // Calls our own Netlify serverless function, which holds the Gemini API key
+      // server-side (env var) so it's never sent to the browser or visible in page source.
+      const resp = await fetch('/.netlify/functions/translate', {
         method: 'POST',
-        headers: {
-          'content-type': 'application/json',
-          'x-goog-api-key': apiKey
-        },
-        body: JSON.stringify({
-          system_instruction: { parts: [{ text: systemPrompt }] },
-          contents: [{ role: 'user', parts: [{ text: input }] }],
-          generationConfig: { maxOutputTokens: 8192, temperature: 0.3 }
-        })
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ model, systemPrompt, input })
       });
 
       const data = await resp.json();
 
       if (!resp.ok) {
-        const msg = (data && data.error && data.error.message) ? data.error.message : JSON.stringify(data);
+        const msg = (data && data.error && data.error.message) ? data.error.message : (data && data.error) ? data.error : JSON.stringify(data);
         throw new Error(msg);
       }
 
