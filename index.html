@@ -192,8 +192,9 @@
       <label class="field">
         <span class="lbl">โมเดล</span>
         <select id="model">
-          <option value="gemini-3.5-flash" selected>gemini-3.5-flash (แนะนำ รุ่นใหม่ล่าสุด เร็ว)</option>
-          <option value="gemini-2.5-flash">gemini-2.5-flash (สมดุลคุณภาพ/ความเร็ว/ราคา)</option>
+          <option value="gemini-3.1-flash-lite" selected>gemini-3.1-flash-lite (แนะนำ โควต้าฟรีสูงสุด 500 ครั้ง/วัน)</option>
+          <option value="gemini-3.5-flash">gemini-3.5-flash (คุณภาพสูงสุด แต่โควต้าฟรีน้อย 20 ครั้ง/วัน)</option>
+          <option value="gemini-2.5-flash">gemini-2.5-flash (สมดุลคุณภาพ/ความเร็ว/ราคา โควต้าฟรีน้อย 20 ครั้ง/วัน)</option>
         </select>
       </label>
       <div class="btn-row">
@@ -374,7 +375,7 @@ Mystery Box</textarea>
 
   // ---------- Load saved settings ----------
   function loadSettings() {
-    modelEl.value = localStorage.getItem('cabalTranslator.model') || 'gemini-3.5-flash';
+    modelEl.value = localStorage.getItem('cabalTranslator.model') || 'gemini-3.1-flash-lite';
     glossaryTextEl.value = localStorage.getItem('cabalTranslator.glossary') || '';
     toneEl.value = localStorage.getItem('cabalTranslator.tone') || 'casual';
     const savedTerms = localStorage.getItem('cabalTranslator.protectedTerms');
@@ -809,12 +810,14 @@ Mystery Box</textarea>
   // Each Gemini model has its OWN separate free-tier quota bucket. If the selected
   // model's quota is exhausted, automatically cascading to another model lets us keep
   // translating for free instead of failing outright or requiring a paid plan.
-  // Note: gemini-2.0-flash and gemini-3-pro-preview (resolves to gemini-3.1-pro) are
-  // deliberately excluded here — this project has a permanent 0-request free-tier
-  // allocation for both (confirmed via repeated "limit: 0" errors on each), so trying
-  // them only wastes time. Pro-tier models generally aren't included in the free tier
-  // at all; only the Flash-family models below have real free-tier quota here.
-  const MODEL_FALLBACK_ORDER = ['gemini-3.5-flash', 'gemini-2.5-flash'];
+  // gemini-3.1-flash-lite comes first: confirmed via Google AI Studio's Rate Limit
+  // page that this project gets 15 RPM / 500 RPD for it, vs only 5 RPM / 20 RPD for
+  // gemini-3.5-flash and gemini-2.5-flash — 25x the daily headroom, for free, and
+  // Google explicitly positions Flash-Lite for translation/simple-data-processing use.
+  // gemini-2.0-flash and gemini-3-pro-preview (resolves to gemini-3.1-pro) are
+  // deliberately excluded — this project has a permanent 0-request free-tier
+  // allocation for both (confirmed via repeated "limit: 0" errors on each).
+  const MODEL_FALLBACK_ORDER = ['gemini-3.1-flash-lite', 'gemini-3.5-flash', 'gemini-2.5-flash'];
 
   async function callTranslateApi(model, systemPrompt, input, onRetry) {
     // Calls our own Netlify serverless function, which holds the Gemini API key
