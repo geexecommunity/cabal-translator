@@ -798,62 +798,90 @@ Mystery Box</textarea>
         setStatus(`⏳ ${prefix}โมเดลมีผู้ใช้งานเยอะ (high demand) กำลังลองใหม่อัตโนมัติ (${info.attempt}/${info.max})...`, 'busy');
       } else if (info.type === 'quota') {
         setStatus(`⏳ ${prefix}เกินโควต้าการใช้งานชั่วคราว กำลังรอ ${info.waitSec} วินาทีแล้วลองใหม่อัตโนมัติ...`, 'busy');
+      } else if (info.type === 'fallback') {
+        setStatus(`⏳ ${prefix}โมเดล ${info.fromModel} ใช้ไม่ได้ชั่วคราว (โควต้าเต็ม) กำลังสลับไปใช้ ${info.toModel} อัตโนมัติ...`, 'busy');
       }
     };
   }
+
+  // Each Gemini model has its OWN separate free-tier quota bucket. If the selected
+  // model's quota is exhausted, automatically cascading to another model lets us keep
+  // translating for free instead of failing outright or requiring a paid plan.
+  const MODEL_FALLBACK_ORDER = ['gemini-3.5-flash', 'gemini-2.5-flash', 'gemini-3-pro-preview', 'gemini-2.0-flash'];
 
   async function callTranslateApi(model, systemPrompt, input, onRetry) {
     // Calls our own Netlify serverless function, which holds the Gemini API key
     // server-side (env var) so it's never sent to the browser or visible in page source.
     // Automatically retries on transient Gemini errors:
     //  - 503 "model overloaded / high demand" -> a few short exponential-backoff retries
-    //  - 429 "quota exceeded" -> a single retry after the exact wait time Gemini reports
+    //  - 429 "quota exceeded" -> one retry after the exact wait time Gemini reports, then
+    //    falls back to trying other models (separate free-tier quota pools) before giving up
+    //  - 404 "model not found/unsupported" -> immediately falls back to the next model
     const OVERLOAD_DELAYS_MS = [2000, 4000, 8000];
-    let quotaRetried = false;
+    const modelsToTry = [model, ...MODEL_FALLBACK_ORDER.filter(m => m !== model)];
+    let lastErrMsg = '';
 
-    for (let attempt = 0; ; attempt++) {
-      const resp = await fetch('/.netlify/functions/translate', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ model, systemPrompt, input })
-      });
+    for (let modelIdx = 0; modelIdx < modelsToTry.length; modelIdx++) {
+      const currentModel = modelsToTry[modelIdx];
+      let quotaRetried = false;
+      let switchModel = false;
 
-      const data = await resp.json();
+      for (let attempt = 0; ; attempt++) {
+        const resp = await fetch('/.netlify/functions/translate', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ model: currentModel, systemPrompt, input })
+        });
 
-      if (!resp.ok) {
-        const msg = (data && data.error && data.error.message) ? data.error.message : (data && data.error) ? data.error : JSON.stringify(data);
-        const isOverloaded = resp.status === 503 || /overloaded|high demand|unavailable/i.test(msg);
-        const isQuota = resp.status === 429 || /quota exceeded/i.test(msg);
+        const data = await resp.json();
 
-        if (isOverloaded && attempt < OVERLOAD_DELAYS_MS.length) {
-          if (onRetry) onRetry({ type: 'overload', attempt: attempt + 1, max: OVERLOAD_DELAYS_MS.length });
-          await sleep(OVERLOAD_DELAYS_MS[attempt]);
-          continue;
+        if (!resp.ok) {
+          const msg = (data && data.error && data.error.message) ? data.error.message : (data && data.error) ? data.error : JSON.stringify(data);
+          lastErrMsg = msg;
+          const isOverloaded = resp.status === 503 || /overloaded|high demand|unavailable/i.test(msg);
+          const isQuota = resp.status === 429 || /quota exceeded/i.test(msg);
+          const isModelUnavailable = resp.status === 404 || /not found|not supported/i.test(msg);
+          const hasNextModel = modelIdx < modelsToTry.length - 1;
+
+          if (isOverloaded && attempt < OVERLOAD_DELAYS_MS.length) {
+            if (onRetry) onRetry({ type: 'overload', attempt: attempt + 1, max: OVERLOAD_DELAYS_MS.length });
+            await sleep(OVERLOAD_DELAYS_MS[attempt]);
+            continue;
+          }
+          if (isQuota && !quotaRetried) {
+            const waitSec = Math.min(parseRetryAfterSeconds(msg) || 30, 59) + 1;
+            quotaRetried = true;
+            if (onRetry) onRetry({ type: 'quota', waitSec });
+            await sleep(waitSec * 1000);
+            continue;
+          }
+          if ((isQuota || isModelUnavailable) && hasNextModel) {
+            if (onRetry) onRetry({ type: 'fallback', fromModel: currentModel, toModel: modelsToTry[modelIdx + 1] });
+            switchModel = true;
+            break;
+          }
+          throw new Error(msg);
         }
-        if (isQuota && !quotaRetried) {
-          const waitSec = Math.min(parseRetryAfterSeconds(msg) || 30, 59) + 1;
-          quotaRetried = true;
-          if (onRetry) onRetry({ type: 'quota', waitSec });
-          await sleep(waitSec * 1000);
-          continue;
+
+        const candidate = (data.candidates || [])[0];
+        const finishReason = candidate && candidate.finishReason;
+        const parts = (candidate && candidate.content && candidate.content.parts) || [];
+        const textOut = parts.map(p => p.text || '').join('');
+
+        if (!textOut.trim()) {
+          if (finishReason === 'SAFETY' || finishReason === 'RECITATION') {
+            throw new Error('Gemini ปฏิเสธการแปลข้อความนี้ (finishReason: ' + finishReason + ') ลองปรับข้อความหรือแบ่งเป็นส่วนย่อยแล้วลองใหม่');
+          }
+          throw new Error('ไม่ได้รับผลลัพธ์จาก Gemini (finishReason: ' + (finishReason || 'unknown') + ')');
         }
-        throw new Error(msg);
+
+        return textOut.trim();
       }
 
-      const candidate = (data.candidates || [])[0];
-      const finishReason = candidate && candidate.finishReason;
-      const parts = (candidate && candidate.content && candidate.content.parts) || [];
-      const textOut = parts.map(p => p.text || '').join('');
-
-      if (!textOut.trim()) {
-        if (finishReason === 'SAFETY' || finishReason === 'RECITATION') {
-          throw new Error('Gemini ปฏิเสธการแปลข้อความนี้ (finishReason: ' + finishReason + ') ลองปรับข้อความหรือแบ่งเป็นส่วนย่อยแล้วลองใหม่');
-        }
-        throw new Error('ไม่ได้รับผลลัพธ์จาก Gemini (finishReason: ' + (finishReason || 'unknown') + ')');
-      }
-
-      return textOut.trim();
+      if (!switchModel) break;
     }
+
+    throw new Error(lastErrMsg || 'ไม่สามารถแปลได้ในขณะนี้');
   }
 
   async function translate() {
