@@ -646,7 +646,11 @@ Mystery Box</textarea>
   // can make Gemini take too long to respond. Instead of asking the user to split
   // content manually, we split it ourselves behind the scenes and stitch the
   // translated pieces back together, so "แปลภาษา" always works with one click.
-  const MAX_CHUNK_CHARS = 3000;
+  // Free-tier daily quota (RPD) is very small (only 20 requests/day per model on this
+  // account), so every extra chunk = one more request burned from that tiny budget.
+  // Keep chunks as large as safely possible (well under Netlify's ~25s function
+  // timeout) to minimize how many requests one translation needs.
+  const MAX_CHUNK_CHARS = 6000;
 
   function serializeNodes(nodes) {
     const div = document.createElement('div');
@@ -817,8 +821,10 @@ Mystery Box</textarea>
     // server-side (env var) so it's never sent to the browser or visible in page source.
     // Automatically retries on transient Gemini errors:
     //  - 503 "model overloaded / high demand" -> a few short exponential-backoff retries
-    //  - 429 "quota exceeded" -> one retry after the exact wait time Gemini reports, then
-    //    falls back to trying other models (separate free-tier quota pools) before giving up
+    //  - 429 "quota exceeded" -> immediately falls back to the next model (no same-model
+    //    wait-and-retry: the free tier's daily request cap (RPD) is only ~20/day and does
+    //    NOT reset within the short wait time Gemini reports, so retrying on the same
+    //    model would just burn another of the few requests left for nothing)
     //  - 404 "model not found/unsupported" -> immediately falls back to the next model
     const OVERLOAD_DELAYS_MS = [2000, 4000, 8000];
     const modelsToTry = [model, ...MODEL_FALLBACK_ORDER.filter(m => m !== model)];
@@ -826,7 +832,6 @@ Mystery Box</textarea>
 
     for (let modelIdx = 0; modelIdx < modelsToTry.length; modelIdx++) {
       const currentModel = modelsToTry[modelIdx];
-      let quotaRetried = false;
       let switchModel = false;
 
       for (let attempt = 0; ; attempt++) {
@@ -849,15 +854,6 @@ Mystery Box</textarea>
           if (isOverloaded && attempt < OVERLOAD_DELAYS_MS.length) {
             if (onRetry) onRetry({ type: 'overload', attempt: attempt + 1, max: OVERLOAD_DELAYS_MS.length });
             await sleep(OVERLOAD_DELAYS_MS[attempt]);
-            continue;
-          }
-          if (isQuota && !quotaRetried && modelIdx === 0) {
-            // Only wait-and-retry on the user's originally selected model — for
-            // fallback models we want to fail fast and try the next one instead.
-            const waitSec = Math.min(parseRetryAfterSeconds(msg) || 30, 59) + 1;
-            quotaRetried = true;
-            if (onRetry) onRetry({ type: 'quota', waitSec });
-            await sleep(waitSec * 1000);
             continue;
           }
           if ((isQuota || isModelUnavailable) && hasNextModel) {
