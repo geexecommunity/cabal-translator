@@ -638,7 +638,7 @@ Mystery Box</textarea>
     prompt += `into ${tgtName}.\n\n`;
     prompt += `Rules:\n`;
     prompt += `1. ${toneInstruction}\n`;
-    prompt += `2. Keep game-specific proper nouns (item names, event names, class/job names, dungeon names, currency names, etc.) consistent with how players in the target-language community commonly refer to them. If a glossary is provided below, you MUST follow it exactly for any matching term.\n`;
+    prompt += `2. Translate ordinary item/event/class/dungeon/currency names into natural, idiomatic ${tgtName} the way real players would actually say them — do NOT leave descriptive item or event names in English by default just because they sound game-specific. Only keep a term untranslated if it is an official trademarked/branded proper noun unique to Cabal Online that the target-language community conventionally keeps in its original English form, or if it is explicitly listed in the protected-terms or glossary sections below. If a glossary is provided below, you MUST follow it exactly for any matching term.\n`;
     if (isHtml) {
       prompt += `3. This is HTML. Do NOT alter the HTML structure, tags, attributes, classes, ids, or inline styles in any way. Only translate the human-visible text content (including alt/title attribute text meant for display, if present). Return the complete HTML with the same structure, just with the visible text translated.\n`;
     } else {
@@ -660,7 +660,7 @@ Mystery Box</textarea>
         prompt += usedTerms.map(t => `- ${t}`).join('\n') + '\n';
         if (truncatedTerms) prompt += `(...and ${matchedTerms.length - MAX_TERMS} more matching terms omitted for brevity)\n`;
       }
-      prompt += `Also do not translate any other clearly game-specific, branded, system, item, or box names that are not common vocabulary, even if not explicitly listed above.\n`;
+      prompt += `Do not invent additional untranslated exceptions beyond the terms explicitly listed above — translate every other item, event, class, and dungeon name normally into natural ${tgtName}, even if it sounds game-specific or fantasy-themed.\n`;
     }
 
     if (isHtml) {
