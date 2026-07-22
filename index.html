@@ -209,7 +209,8 @@
     <div class="panel-body">
       <p class="hint">
         ใส่ชื่อไอเทม / ชื่อกิจกรรม / ชื่อคลาส ฯลฯ ที่แปลไว้แต่ละภาษา เพื่อให้การแปลใช้คำที่ตรงกันทุกครั้ง<br>
-        รองรับไฟล์ <code>.csv</code> (แถวแรกเป็นหัวคอลัมน์ เช่น <code>term,th,en,ph,id</code>) หรือ <code>.json</code> (array ของ object) — อัปโหลดไฟล์ของคุณได้เลย หรือพิมพ์/วางลงในช่องด้านล่างโดยตรง
+        รองรับไฟล์ <code>.csv</code> (แถวแรกเป็นหัวคอลัมน์ เช่น <code>term,th,en,ph,id</code>) หรือ <code>.json</code> (array ของ object) — อัปโหลดไฟล์ของคุณได้เลย หรือพิมพ์/วางลงในช่องด้านล่างโดยตรง<br>
+        <strong>เพิ่มคำศัพท์แบบเร็ว:</strong> แก้ไขผลลัพธ์การแปลด้านล่างได้โดยตรง แล้วกดปุ่ม "💾 บันทึกเป็นคำศัพท์" เพื่อเพิ่มเข้าคลังนี้อัตโนมัติ (เหมาะกับคำ/วลีสั้นๆ)
       </p>
       <label class="field">
         <span class="lbl">อัปโหลดไฟล์คลังคำศัพท์ (.csv / .json / .txt)</span>
@@ -321,11 +322,12 @@ Mystery Box</textarea>
     <label class="field" style="margin-top:16px;">
       <span class="lbl">ผลลัพธ์การแปล</span>
       <div class="output-wrap">
-        <textarea id="outputText" readonly placeholder="ผลลัพธ์จะแสดงที่นี่..."></textarea>
+        <textarea id="outputText" placeholder="ผลลัพธ์จะแสดงที่นี่... (แก้ไขได้โดยตรงถ้าต้องการปรับคำแปล)"></textarea>
       </div>
     </label>
     <div class="btn-row">
       <button class="btn-secondary" id="copyBtn">📋 คัดลอกผลลัพธ์</button>
+      <button class="btn-secondary" id="saveAsGlossaryBtn" title="บันทึกข้อความต้นฉบับ + ผลลัพธ์ (แก้ไขแล้วก็ได้) เป็นคำศัพท์ใหม่ในคลัง — เหมาะกับคำ/วลีสั้นๆ เช่น ชื่อไอเทม">💾 บันทึกเป็นคำศัพท์</button>
     </div>
   </section>
 
@@ -544,6 +546,55 @@ Mystery Box</textarea>
   }
   glossaryTextEl.addEventListener('input', updateGlossaryCount);
 
+  // Re-serializes glossary rows back into canonical CSV (term,th,en,ph,id) so
+  // appendGlossaryRow can add a new row regardless of whether the existing
+  // glossary was originally CSV or JSON.
+  function serializeGlossaryRows(rows) {
+    const headers = ['term', 'th', 'en', 'ph', 'id'];
+    const lines = [headers.join(',')];
+    rows.forEach(r => {
+      const line = headers.map(h => {
+        let v = r[h] !== undefined && r[h] !== null ? String(r[h]) : '';
+        if (v.includes(',') || v.includes('"') || v.includes('\n')) {
+          v = '"' + v.replace(/"/g, '""') + '"';
+        }
+        return v;
+      }).join(',');
+      lines.push(line);
+    });
+    return lines.join('\n');
+  }
+
+  function appendGlossaryRow(newRow) {
+    const rows = parseGlossary(glossaryTextEl.value);
+    rows.push(newRow);
+    const csv = serializeGlossaryRows(rows);
+    glossaryTextEl.value = csv;
+    localStorage.setItem('cabalTranslator.glossary', csv);
+    updateGlossaryCount();
+  }
+
+  el('saveAsGlossaryBtn').addEventListener('click', function () {
+    const src = (inputTextEl.value || '').trim();
+    const tgt = (outputTextEl.value || '').trim();
+    if (!src || !tgt) {
+      setStatus('⚠️ ต้องมีทั้งข้อความต้นฉบับและผลลัพธ์ก่อนบันทึกเป็นคำศัพท์', 'err');
+      return;
+    }
+    if ((src.length > 200 || tgt.length > 200) &&
+      !confirm('ข้อความค่อนข้างยาว การบันทึกเป็นคำศัพท์เหมาะกับคำ/วลีสั้นๆ (เช่น ชื่อไอเทม) มากกว่าเนื้อหายาวๆ ต้องการบันทึกต่อหรือไม่?')) {
+      return;
+    }
+    const sourceLang = sourceLangEl.value;
+    const targetLang = targetLangEl.value;
+    const row = { term: src };
+    if (sourceLang !== 'auto') row[sourceLang] = src;
+    row[targetLang] = tgt;
+    appendGlossaryRow(row);
+    el('glossaryStatus').textContent = 'บันทึกคำศัพท์ใหม่แล้ว ✓ (' + src.slice(0, 30) + (src.length > 30 ? '…' : '') + ')';
+    setTimeout(() => { el('glossaryStatus').textContent = ''; }, 4000);
+  });
+
   function buildGlossarySection(inputText) {
     const rows = parseGlossary(glossaryTextEl.value);
     if (rows.length === 0) return '';
@@ -638,7 +689,7 @@ Mystery Box</textarea>
     const hay = (inputText || '').toLowerCase();
     const matched = ALWAYS_PROTECTED_PHRASES.filter(p => hay.includes(p.toLowerCase()));
     if (matched.length === 0) return '';
-    return `\n8. The following tagline/slogan phrases must NEVER be translated, no matter the source or target language — keep them verbatim, exactly as written in the original (usually English), wherever they appear (e.g. as a footer, banner, caption closing line, or hashtag-style line):\n` +
+    return `\n8. The following tagline/slogan phrases must NEVER be translated, no matter the source or target language — keep them verbatim, exactly as written in the original (usually English), ONLY at the exact place(s) they already appear in the source text (e.g. as a footer, banner, caption closing line, or hashtag-style line). Do NOT add, repeat, or append these phrases anywhere they do not already appear in the source — copy them across unchanged only where they exist, nothing more:\n` +
       matched.map(t => `- "${t}"`).join('\n') + '\n';
   }
 
@@ -803,8 +854,63 @@ Mystery Box</textarea>
         setStatus(`⏳ ${prefix}เกินโควต้าการใช้งานชั่วคราว กำลังรอ ${info.waitSec} วินาทีแล้วลองใหม่อัตโนมัติ...`, 'busy');
       } else if (info.type === 'fallback') {
         setStatus(`⏳ ${prefix}โมเดล ${info.fromModel} ใช้ไม่ได้ชั่วคราว (โควต้าเต็ม) กำลังสลับไปใช้ ${info.toModel} อัตโนมัติ...`, 'busy');
+      } else if (info.type === 'cacheHit') {
+        setStatus(`⚡ ${prefix}เคยแปลข้อความนี้ไว้แล้ว ใช้ผลจากแคชแทนการเรียก API`, 'ok');
       }
     };
+  }
+
+  // ---------- Translation memory (client-side cache) ----------
+  // Caches each individual translated chunk keyed by everything that affects the
+  // output (language pair, tone, type, and current glossary/protected-terms content).
+  // Repeated identical content (recurring headers, footers, item names across
+  // multiple documents) is served instantly from cache instead of burning one of
+  // the very limited daily API requests — directly helps translate "more" per day.
+  const CACHE_STORAGE_KEY = 'cabalTranslator.cache';
+  const CACHE_MAX_ENTRIES = 800;
+
+  function loadCache() {
+    try { return JSON.parse(localStorage.getItem(CACHE_STORAGE_KEY) || '{}'); }
+    catch (e) { return {}; }
+  }
+
+  function saveCache(cache) {
+    try { localStorage.setItem(CACHE_STORAGE_KEY, JSON.stringify(cache)); }
+    catch (e) { /* storage full/unavailable — cache just won't persist, harmless */ }
+  }
+
+  async function sha256Hex(text) {
+    const enc = new TextEncoder().encode(text);
+    const digest = await crypto.subtle.digest('SHA-256', enc);
+    return Array.from(new Uint8Array(digest)).map(b => b.toString(16).padStart(2, '0')).join('');
+  }
+
+  // Includes glossary/protected-terms/protected-columns content in the key so the
+  // cache automatically invalidates itself whenever those settings change.
+  async function buildCacheKey(inputType, sourceLang, targetLang, tone, text) {
+    return sha256Hex([
+      inputType, sourceLang, targetLang, tone,
+      glossaryTextEl.value || '', protectedTermsEl.value || '', protectedColumnsEl.value || '',
+      text
+    ].join('␟'));
+  }
+
+  function getCachedTranslation(cacheKey) {
+    const cache = loadCache();
+    const hit = cache[cacheKey];
+    return hit ? hit.output : null;
+  }
+
+  function setCachedTranslation(cacheKey, output) {
+    const cache = loadCache();
+    const keys = Object.keys(cache);
+    if (keys.length >= CACHE_MAX_ENTRIES) {
+      keys.sort((a, b) => (cache[a].t || 0) - (cache[b].t || 0))
+        .slice(0, Math.ceil(CACHE_MAX_ENTRIES * 0.1))
+        .forEach(k => delete cache[k]);
+    }
+    cache[cacheKey] = { output, t: Date.now() };
+    saveCache(cache);
   }
 
   // Each Gemini model has its OWN separate free-tier quota bucket. If the selected
@@ -819,7 +925,7 @@ Mystery Box</textarea>
   // allocation for both (confirmed via repeated "limit: 0" errors on each).
   const MODEL_FALLBACK_ORDER = ['gemini-3.1-flash-lite', 'gemini-3.5-flash', 'gemini-2.5-flash'];
 
-  async function callTranslateApi(model, systemPrompt, input, onRetry) {
+  async function callTranslateApi(model, systemPrompt, input, onRetry, cacheKey) {
     // Calls our own Netlify serverless function, which holds the Gemini API key
     // server-side (env var) so it's never sent to the browser or visible in page source.
     // Automatically retries on transient Gemini errors:
@@ -829,6 +935,13 @@ Mystery Box</textarea>
     //    NOT reset within the short wait time Gemini reports, so retrying on the same
     //    model would just burn another of the few requests left for nothing)
     //  - 404 "model not found/unsupported" -> immediately falls back to the next model
+    if (cacheKey) {
+      const cached = getCachedTranslation(cacheKey);
+      if (cached !== null) {
+        if (onRetry) onRetry({ type: 'cacheHit' });
+        return cached;
+      }
+    }
     const OVERLOAD_DELAYS_MS = [2000, 4000, 8000];
     const modelsToTry = [model, ...MODEL_FALLBACK_ORDER.filter(m => m !== model)];
     let lastErrMsg = '';
@@ -879,7 +992,9 @@ Mystery Box</textarea>
           throw new Error('ไม่ได้รับผลลัพธ์จาก Gemini (finishReason: ' + (finishReason || 'unknown') + ')');
         }
 
-        return textOut.trim();
+        const finalOut = textOut.trim();
+        if (cacheKey) setCachedTranslation(cacheKey, finalOut);
+        return finalOut;
       }
 
       if (!switchModel) break;
@@ -914,14 +1029,16 @@ Mystery Box</textarea>
     try {
       if (input.length <= MAX_CHUNK_CHARS) {
         setStatus('⏳ กำลังแปล...', 'busy');
-        const textOut = await callTranslateApi(model, systemPrompt, input, makeRetryHandler(''));
+        const cacheKey = await buildCacheKey(inputType, sourceLang, targetLang, toneEl.value, input);
+        const textOut = await callTranslateApi(model, systemPrompt, input, makeRetryHandler(''), cacheKey);
         outputTextEl.value = textOut;
       } else if (inputType === 'html') {
         const { chunks, plan } = chunkHtmlForTranslation(input, MAX_CHUNK_CHARS);
         const translated = [];
         for (let i = 0; i < chunks.length; i++) {
           setStatus(`⏳ กำลังแปล... (${i + 1}/${chunks.length} ท่อน)`, 'busy');
-          translated.push(await callTranslateApi(model, systemPrompt, chunks[i], makeRetryHandler(`(${i + 1}/${chunks.length} ท่อน) `)));
+          const cacheKey = await buildCacheKey(inputType, sourceLang, targetLang, toneEl.value, chunks[i]);
+          translated.push(await callTranslateApi(model, systemPrompt, chunks[i], makeRetryHandler(`(${i + 1}/${chunks.length} ท่อน) `), cacheKey));
         }
         outputTextEl.value = reassembleHtmlChunks(translated, plan);
       } else {
@@ -929,7 +1046,8 @@ Mystery Box</textarea>
         const translated = [];
         for (let i = 0; i < chunks.length; i++) {
           setStatus(`⏳ กำลังแปล... (${i + 1}/${chunks.length} ท่อน)`, 'busy');
-          translated.push(await callTranslateApi(model, systemPrompt, chunks[i], makeRetryHandler(`(${i + 1}/${chunks.length} ท่อน) `)));
+          const cacheKey = await buildCacheKey(inputType, sourceLang, targetLang, toneEl.value, chunks[i]);
+          translated.push(await callTranslateApi(model, systemPrompt, chunks[i], makeRetryHandler(`(${i + 1}/${chunks.length} ท่อน) `), cacheKey));
         }
         outputTextEl.value = translated.join('\n\n');
       }
