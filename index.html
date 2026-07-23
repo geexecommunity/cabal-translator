@@ -1039,6 +1039,131 @@ Mystery Box</textarea>
     }
   }
 
+  // ---------- "Smart" translation: per-unit (paragraph / HTML node / table row) cache
+  // pre-filtering. Recurring banners, footers, item rows, taglines, etc. that appear across
+  // different captions get served instantly from cache (zero API cost) even when mixed
+  // together with brand-new content in the same translation — only the genuinely new units
+  // get sent to Gemini, still grouped up to MAX_CHUNK_CHARS to keep the daily request count
+  // low. The more the tool is used, the more of any given translation is likely to already
+  // be known, so real API usage naturally goes down over time.
+
+  function splitPlainParagraphsRaw(text) {
+    return text.split(/\n{2,}/);
+  }
+
+  // Packs a list of unit strings into groups whose combined length stays under maxChars,
+  // only ever grouping units that are consecutive AND not already resolved. `resolved` is a
+  // same-length array where entries !== null mean "already have an answer" (e.g. cache hit)
+  // and force a group boundary. Returns an array of index-arrays (one per group).
+  function packConsecutiveMisses(units, resolved, maxChars) {
+    const groups = [];
+    let cur = [];
+    let curLen = 0;
+    units.forEach((u, i) => {
+      if (resolved[i] !== null) {
+        if (cur.length) { groups.push(cur); cur = []; curLen = 0; }
+        return;
+      }
+      if (curLen + u.length > maxChars && cur.length) {
+        groups.push(cur);
+        cur = [i];
+        curLen = u.length;
+      } else {
+        cur.push(i);
+        curLen += u.length;
+      }
+    });
+    if (cur.length) groups.push(cur);
+    return groups;
+  }
+
+  async function translatePlainTextSmart(model, systemPrompt, input, cacheParams) {
+    const units = splitPlainParagraphsRaw(input);
+    const unitKeys = [];
+    for (const u of units) unitKeys.push(await buildCacheKey(cacheParams.inputType, cacheParams.sourceLang, cacheParams.targetLang, cacheParams.tone, u));
+    const unitOutputs = units.map((u, i) => (!u.trim() ? u : getCachedTranslation(unitKeys[i])));
+
+    const groups = packConsecutiveMisses(units, unitOutputs, MAX_CHUNK_CHARS);
+    const cacheHitCount = units.length - groups.reduce((s, g) => s + g.length, 0);
+    if (cacheHitCount > 0 && groups.length > 0) {
+      setStatus(`⚡ พบข้อความที่เคยแปลไว้แล้ว ${cacheHitCount}/${units.length} ย่อหน้า กำลังแปลส่วนที่เหลือ...`, 'busy');
+    }
+
+    for (let g = 0; g < groups.length; g++) {
+      const idxs = groups[g];
+      const groupText = idxs.map(i => units[i]).join('\n\n');
+      const label = (groups.length > 1 || cacheHitCount > 0) ? `(กลุ่ม ${g + 1}/${groups.length}) ` : '';
+      setStatus(`⏳ กำลังแปล... ${label}`, 'busy');
+      const out = await translateChunkAutoSplit(model, systemPrompt, groupText, cacheParams.inputType, cacheParams, label, MAX_CHUNK_CHARS, 0);
+
+      const outParts = out.split(/\n{2,}/);
+      if (outParts.length === idxs.length) {
+        idxs.forEach((i, k) => {
+          unitOutputs[i] = outParts[k];
+          setCachedTranslation(unitKeys[i], outParts[k]);
+        });
+      } else {
+        // Model didn't preserve the exact paragraph count — keep the whole group's output
+        // together (still correct, just not individually re-cacheable next time).
+        idxs.forEach((i, k) => { unitOutputs[i] = k === 0 ? out : ''; });
+      }
+    }
+
+    return unitOutputs.join('\n\n');
+  }
+
+  async function translateHtmlSmart(model, systemPrompt, input, cacheParams) {
+    // maxChars=1 forces chunkHtmlForTranslation's existing, proven splitting logic (including
+    // its oversized-table row-grouping) down to the finest possible granularity: one top-level
+    // node or table-row-group per unit.
+    const { chunks: units, plan: unitPlan } = chunkHtmlForTranslation(input, 1);
+    const unitKeys = [];
+    for (const u of units) unitKeys.push(await buildCacheKey(cacheParams.inputType, cacheParams.sourceLang, cacheParams.targetLang, cacheParams.tone, u));
+    const unitOutputs = units.map((u, i) => (!u.trim() ? u : getCachedTranslation(unitKeys[i])));
+
+    const groups = packConsecutiveMisses(units, unitOutputs, MAX_CHUNK_CHARS);
+    const cacheHitCount = units.length - groups.reduce((s, g) => s + g.length, 0);
+    if (cacheHitCount > 0 && groups.length > 0) {
+      setStatus(`⚡ พบเนื้อหาที่เคยแปลไว้แล้ว ${cacheHitCount}/${units.length} จุด กำลังแปลส่วนที่เหลือ...`, 'busy');
+    }
+
+    for (let g = 0; g < groups.length; g++) {
+      const idxs = groups[g];
+      const groupHtml = idxs.map(i => units[i]).join('');
+      const label = (groups.length > 1 || cacheHitCount > 0) ? `(กลุ่ม ${g + 1}/${groups.length}) ` : '';
+      setStatus(`⏳ กำลังแปล... ${label}`, 'busy');
+      const out = await translateChunkAutoSplit(model, systemPrompt, groupHtml, cacheParams.inputType, cacheParams, label, MAX_CHUNK_CHARS, 0);
+
+      if (idxs.length === 1) {
+        unitOutputs[idxs[0]] = out;
+        setCachedTranslation(unitKeys[idxs[0]], out);
+        continue;
+      }
+      // Multiple units translated together in one request — try to split the combined output
+      // back into individual pieces by re-parsing its top-level node count, so each one can be
+      // cached separately for future reuse. Falls back to keeping the combined output together
+      // if the model didn't preserve the exact node count.
+      let outNodes = [];
+      try {
+        const outDoc = new DOMParser().parseFromString(out, 'text/html');
+        outNodes = Array.from(outDoc.body.childNodes);
+      } catch (e) { outNodes = []; }
+
+      if (outNodes.length === idxs.length) {
+        idxs.forEach((i, k) => {
+          const n = outNodes[k];
+          const single = n.nodeType === 1 ? n.outerHTML : (n.textContent || '');
+          unitOutputs[i] = single;
+          setCachedTranslation(unitKeys[i], single);
+        });
+      } else {
+        idxs.forEach((i, k) => { unitOutputs[i] = k === 0 ? out : ''; });
+      }
+    }
+
+    return reassembleHtmlChunks(unitOutputs, unitPlan);
+  }
+
   async function translate() {
     const model = modelEl.value;
     const inputType = inputTypeEl.value;
@@ -1059,31 +1184,16 @@ Mystery Box</textarea>
     outputTextEl.value = '';
 
     // Build the system prompt once from the FULL original text so glossary/protected-term
-    // matching considers the whole document, then reuse it for every chunk.
+    // matching considers the whole document, then reuse it for every unit/group.
     const tone = toneEl.value;
     const systemPrompt = buildSystemPrompt(inputType, sourceLang, targetLang, tone, input);
     const cacheParams = { inputType, sourceLang, targetLang, tone };
 
     try {
-      if (input.length <= MAX_CHUNK_CHARS) {
-        setStatus('⏳ กำลังแปล...', 'busy');
-        outputTextEl.value = await translateChunkAutoSplit(model, systemPrompt, input, inputType, cacheParams, '', MAX_CHUNK_CHARS, 0);
-      } else if (inputType === 'html') {
-        const { chunks, plan } = chunkHtmlForTranslation(input, MAX_CHUNK_CHARS);
-        const translated = [];
-        for (let i = 0; i < chunks.length; i++) {
-          setStatus(`⏳ กำลังแปล... (${i + 1}/${chunks.length} ท่อน)`, 'busy');
-          translated.push(await translateChunkAutoSplit(model, systemPrompt, chunks[i], inputType, cacheParams, `(${i + 1}/${chunks.length} ท่อน) `, MAX_CHUNK_CHARS, 0));
-        }
-        outputTextEl.value = reassembleHtmlChunks(translated, plan);
+      if (inputType === 'html') {
+        outputTextEl.value = await translateHtmlSmart(model, systemPrompt, input, cacheParams);
       } else {
-        const chunks = chunkPlainText(input, MAX_CHUNK_CHARS);
-        const translated = [];
-        for (let i = 0; i < chunks.length; i++) {
-          setStatus(`⏳ กำลังแปล... (${i + 1}/${chunks.length} ท่อน)`, 'busy');
-          translated.push(await translateChunkAutoSplit(model, systemPrompt, chunks[i], inputType, cacheParams, `(${i + 1}/${chunks.length} ท่อน) `, MAX_CHUNK_CHARS, 0));
-        }
-        outputTextEl.value = translated.join('\n\n');
+        outputTextEl.value = await translatePlainTextSmart(model, systemPrompt, input, cacheParams);
       }
       setStatus('✅ แปลเสร็จแล้ว', 'ok');
     } catch (err) {
