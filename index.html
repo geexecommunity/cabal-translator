@@ -1003,6 +1003,42 @@ Mystery Box</textarea>
     throw new Error(lastErrMsg || 'ไม่สามารถแปลได้ในขณะนี้');
   }
 
+  // If a single request still times out (Netlify Functions have a hard ~25s limit, and a
+  // dense/complex chunk can occasionally exceed it even under MAX_CHUNK_CHARS), automatically
+  // split that chunk in half and retry each half recursively instead of failing outright and
+  // asking the user to manually shorten the input. Stops splitting below ~400 chars or after
+  // 4 levels deep to avoid runaway request counts.
+  async function translateChunkAutoSplit(model, systemPrompt, text, inputType, cacheParams, statusPrefix, maxChars, depth) {
+    const cacheKey = await buildCacheKey(cacheParams.inputType, cacheParams.sourceLang, cacheParams.targetLang, cacheParams.tone, text);
+    try {
+      return await callTranslateApi(model, systemPrompt, text, makeRetryHandler(statusPrefix), cacheKey);
+    } catch (err) {
+      const isTimeout = /took too long|timeout/i.test(err.message || '');
+      if (!isTimeout || depth >= 4 || text.length < 400) throw err;
+
+      setStatus(`⏳ ${statusPrefix}ข้อความส่วนนี้ใช้เวลานานเกินไป กำลังแบ่งเป็นส่วนย่อยแล้วลองใหม่อัตโนมัติ...`, 'busy');
+      const halfMax = Math.max(300, Math.floor(Math.min(maxChars, text.length) / 2));
+
+      if (inputType === 'html') {
+        const { chunks: subChunks, plan: subPlan } = chunkHtmlForTranslation(text, halfMax);
+        if (subChunks.length <= 1) throw err;
+        const subResults = [];
+        for (const sc of subChunks) {
+          subResults.push(await translateChunkAutoSplit(model, systemPrompt, sc, inputType, cacheParams, statusPrefix, halfMax, depth + 1));
+        }
+        return reassembleHtmlChunks(subResults, subPlan);
+      } else {
+        const subChunks = chunkPlainText(text, halfMax);
+        if (subChunks.length <= 1) throw err;
+        const subResults = [];
+        for (const sc of subChunks) {
+          subResults.push(await translateChunkAutoSplit(model, systemPrompt, sc, inputType, cacheParams, statusPrefix, halfMax, depth + 1));
+        }
+        return subResults.join('\n\n');
+      }
+    }
+  }
+
   async function translate() {
     const model = modelEl.value;
     const inputType = inputTypeEl.value;
@@ -1024,21 +1060,20 @@ Mystery Box</textarea>
 
     // Build the system prompt once from the FULL original text so glossary/protected-term
     // matching considers the whole document, then reuse it for every chunk.
-    const systemPrompt = buildSystemPrompt(inputType, sourceLang, targetLang, toneEl.value, input);
+    const tone = toneEl.value;
+    const systemPrompt = buildSystemPrompt(inputType, sourceLang, targetLang, tone, input);
+    const cacheParams = { inputType, sourceLang, targetLang, tone };
 
     try {
       if (input.length <= MAX_CHUNK_CHARS) {
         setStatus('⏳ กำลังแปล...', 'busy');
-        const cacheKey = await buildCacheKey(inputType, sourceLang, targetLang, toneEl.value, input);
-        const textOut = await callTranslateApi(model, systemPrompt, input, makeRetryHandler(''), cacheKey);
-        outputTextEl.value = textOut;
+        outputTextEl.value = await translateChunkAutoSplit(model, systemPrompt, input, inputType, cacheParams, '', MAX_CHUNK_CHARS, 0);
       } else if (inputType === 'html') {
         const { chunks, plan } = chunkHtmlForTranslation(input, MAX_CHUNK_CHARS);
         const translated = [];
         for (let i = 0; i < chunks.length; i++) {
           setStatus(`⏳ กำลังแปล... (${i + 1}/${chunks.length} ท่อน)`, 'busy');
-          const cacheKey = await buildCacheKey(inputType, sourceLang, targetLang, toneEl.value, chunks[i]);
-          translated.push(await callTranslateApi(model, systemPrompt, chunks[i], makeRetryHandler(`(${i + 1}/${chunks.length} ท่อน) `), cacheKey));
+          translated.push(await translateChunkAutoSplit(model, systemPrompt, chunks[i], inputType, cacheParams, `(${i + 1}/${chunks.length} ท่อน) `, MAX_CHUNK_CHARS, 0));
         }
         outputTextEl.value = reassembleHtmlChunks(translated, plan);
       } else {
@@ -1046,8 +1081,7 @@ Mystery Box</textarea>
         const translated = [];
         for (let i = 0; i < chunks.length; i++) {
           setStatus(`⏳ กำลังแปล... (${i + 1}/${chunks.length} ท่อน)`, 'busy');
-          const cacheKey = await buildCacheKey(inputType, sourceLang, targetLang, toneEl.value, chunks[i]);
-          translated.push(await callTranslateApi(model, systemPrompt, chunks[i], makeRetryHandler(`(${i + 1}/${chunks.length} ท่อน) `), cacheKey));
+          translated.push(await translateChunkAutoSplit(model, systemPrompt, chunks[i], inputType, cacheParams, `(${i + 1}/${chunks.length} ท่อน) `, MAX_CHUNK_CHARS, 0));
         }
         outputTextEl.value = translated.join('\n\n');
       }
