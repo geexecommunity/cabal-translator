@@ -194,7 +194,6 @@
         <select id="model">
           <option value="gemini-3.1-flash-lite" selected>gemini-3.1-flash-lite (แนะนำ โควต้าฟรีสูงสุด 500 ครั้ง/วัน)</option>
           <option value="gemini-3.5-flash">gemini-3.5-flash (คุณภาพสูงสุด แต่โควต้าฟรีน้อย 20 ครั้ง/วัน)</option>
-          <option value="gemini-2.5-flash">gemini-2.5-flash (สมดุลคุณภาพ/ความเร็ว/ราคา โควต้าฟรีน้อย 20 ครั้ง/วัน)</option>
         </select>
       </label>
       <div class="btn-row">
@@ -918,12 +917,17 @@ Mystery Box</textarea>
   // translating for free instead of failing outright or requiring a paid plan.
   // gemini-3.1-flash-lite comes first: confirmed via Google AI Studio's Rate Limit
   // page that this project gets 15 RPM / 500 RPD for it, vs only 5 RPM / 20 RPD for
-  // gemini-3.5-flash and gemini-2.5-flash — 25x the daily headroom, for free, and
-  // Google explicitly positions Flash-Lite for translation/simple-data-processing use.
-  // gemini-2.0-flash and gemini-3-pro-preview (resolves to gemini-3.1-pro) are
-  // deliberately excluded — this project has a permanent 0-request free-tier
-  // allocation for both (confirmed via repeated "limit: 0" errors on each).
-  const MODEL_FALLBACK_ORDER = ['gemini-3.1-flash-lite', 'gemini-3.5-flash', 'gemini-2.5-flash'];
+  // gemini-3.5-flash — 25x the daily headroom, for free, and Google explicitly
+  // positions Flash-Lite for translation/simple-data-processing use.
+  // Deliberately excluded (confirmed unusable on this project as of Jul 2026):
+  //  - gemini-2.0-flash, gemini-3-pro-preview (resolves to gemini-3.1-pro): permanent
+  //    0-request free-tier allocation ("limit: 0" on every attempt)
+  //  - gemini-2.5-flash, gemini-2.5-flash-lite: Google retired these for new-user
+  //    access entirely ("no longer available to new users" error)
+  //  - gemini-3.6-flash, gemini-3.5-flash-lite: newer models, but this proxy's fixed
+  //    generationConfig (thinkingConfig.thinkingBudget: 0) triggers "invalid argument"
+  //    on them — would need server-side changes to support, not yet done
+  const MODEL_FALLBACK_ORDER = ['gemini-3.1-flash-lite', 'gemini-3.5-flash'];
 
   async function callTranslateApi(model, systemPrompt, input, onRetry, cacheKey) {
     // Calls our own Netlify serverless function, which holds the Gemini API key
