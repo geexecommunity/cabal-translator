@@ -934,10 +934,14 @@ Mystery Box</textarea>
     // server-side (env var) so it's never sent to the browser or visible in page source.
     // Automatically retries on transient Gemini errors:
     //  - 503 "model overloaded / high demand" -> a few short exponential-backoff retries
-    //  - 429 "quota exceeded" -> immediately falls back to the next model (no same-model
-    //    wait-and-retry: the free tier's daily request cap (RPD) is only ~20/day and does
-    //    NOT reset within the short wait time Gemini reports, so retrying on the same
-    //    model would just burn another of the few requests left for nothing)
+    //  - 429 "quota exceeded" -> Gemini's free tier enforces both a per-minute (RPM) and a
+    //    per-day (RPD) cap under the exact same "quota exceeded" error text, with no
+    //    reliable way to tell which one was hit from the message alone. So we first do a
+    //    couple of short bounded retries on the SAME model (using Gemini's own suggested
+    //    "retry in Xs" wait when present) — this resolves the common case of a brief
+    //    per-minute burst on a model that still has plenty of daily headroom left. If those
+    //    retries also fail (genuinely exhausted for the day), only then fall back to the
+    //    next model in MODEL_FALLBACK_ORDER.
     //  - 404 "model not found/unsupported" -> immediately falls back to the next model
     if (cacheKey) {
       const cached = getCachedTranslation(cacheKey);
@@ -947,6 +951,7 @@ Mystery Box</textarea>
       }
     }
     const OVERLOAD_DELAYS_MS = [2000, 4000, 8000];
+    const QUOTA_RETRY_MAX = 2;
     const modelsToTry = [model, ...MODEL_FALLBACK_ORDER.filter(m => m !== model)];
     let lastErrMsg = '';
 
@@ -974,6 +979,12 @@ Mystery Box</textarea>
           if (isOverloaded && attempt < OVERLOAD_DELAYS_MS.length) {
             if (onRetry) onRetry({ type: 'overload', attempt: attempt + 1, max: OVERLOAD_DELAYS_MS.length });
             await sleep(OVERLOAD_DELAYS_MS[attempt]);
+            continue;
+          }
+          if (isQuota && attempt < QUOTA_RETRY_MAX) {
+            const waitSec = Math.min(parseRetryAfterSeconds(msg) || 5, 15);
+            if (onRetry) onRetry({ type: 'quota', waitSec });
+            await sleep(waitSec * 1000);
             continue;
           }
           if ((isQuota || isModelUnavailable) && hasNextModel) {
