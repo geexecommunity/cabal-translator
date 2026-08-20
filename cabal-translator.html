@@ -716,6 +716,79 @@ Mystery Box</textarea>
     return node.nodeType === 1 ? node.outerHTML.length : (node.textContent || '').length;
   }
 
+  // Row-splits a <table> element into per-row-group chunks. Shared by the top-level TABLE
+  // case and the wrapper-div-containing-a-table case below.
+  function splitTableRows(tableEl, maxChars, idx, chunks, plan) {
+    const theadEl = tableEl.querySelector(':scope > thead');
+    const tbodyEl = tableEl.querySelector(':scope > tbody');
+    const rows = tbodyEl ? Array.from(tbodyEl.children) : Array.from(tableEl.querySelectorAll(':scope > tr'));
+    const tableOpenAttrs = tableEl.cloneNode(false).outerHTML; // e.g. <table class="...">...</table> (empty)
+    const tableId = 'tbl-' + idx + '-' + Math.random().toString(36).slice(2, 7);
+
+    let group = [];
+    let groupLen = theadEl ? theadEl.outerHTML.length : 0;
+    let isFirstGroup = true;
+    function pushGroup() {
+      if (!group.length) return;
+      const tbl = document.createElement('table');
+      if (isFirstGroup && theadEl) tbl.appendChild(theadEl.cloneNode(true));
+      const tbody = document.createElement('tbody');
+      group.forEach(r => tbody.appendChild(r.cloneNode(true)));
+      tbl.appendChild(tbody);
+      chunks.push(tbl.outerHTML);
+      plan.push({ type: 'tableRows', tableId, isFirst: isFirstGroup, tableOpenAttrs });
+      isFirstGroup = false;
+      group = [];
+      groupLen = 0;
+    }
+    rows.forEach(row => {
+      const rLen = row.outerHTML.length;
+      if (groupLen + rLen > maxChars && group.length) pushGroup();
+      group.push(row);
+      groupLen += rLen;
+    });
+    pushGroup();
+  }
+
+  // Large tables are sometimes nested one level inside a wrapper element (e.g. a "package"
+  // <div> with a header + date range above a big items table) rather than being a top-level
+  // <table> themselves. If we send that whole wrapper as a single chunk, a big table (many
+  // rows, each with verbose inline styles) can push Gemini's response close to/over its output
+  // token limit, silently truncating the reply mid-table -> broken/unclosed HTML that visually
+  // corrupts the rest of the page (e.g. a later section appears to "leak" into the middle of
+  // the table). To avoid this, if a wrapper node is large AND has a table as a direct child,
+  // it's split into [prefix: wrapper-open + content before the table] + [table split by rows,
+  // same as the top-level TABLE case] + [suffix: content after the table + wrapper-close]
+  // instead of being sent whole. The prefix/suffix are each sent as a small, self-closed
+  // fragment (so Gemini always sees valid HTML), and the synthetic wrapper tag is stripped
+  // back off after translation when reassembling.
+  // This threshold is independent of maxChars (which can be as low as 1 to force
+  // finest-possible caching granularity) - it only kicks in for genuinely large embedded
+  // tables, so small package boxes stay as one efficient cache unit.
+  const WRAPPER_TABLE_SPLIT_CHARS = 3000;
+
+  function splitWrapperWithTable(node, innerTable, maxChars, idx, chunks, plan) {
+    const tagName = node.tagName.toLowerCase();
+    const openTag = node.cloneNode(false).outerHTML.replace(/<\/[^>]+>\s*$/i, '');
+    const closeTag = '</' + tagName + '>';
+
+    const beforeNodes = [];
+    const afterNodes = [];
+    let seenTable = false;
+    Array.from(node.childNodes).forEach(child => {
+      if (child === innerTable) { seenTable = true; return; }
+      (seenTable ? afterNodes : beforeNodes).push(child);
+    });
+
+    chunks.push(openTag + serializeNodes(beforeNodes) + closeTag);
+    plan.push({ type: 'wrapperPrefix', tagName });
+
+    splitTableRows(innerTable, maxChars, idx, chunks, plan);
+
+    chunks.push(openTag + serializeNodes(afterNodes) + closeTag);
+    plan.push({ type: 'wrapperSuffix', tagName });
+  }
+
   // Splits an HTML fragment into an ordered list of chunk strings to send to the API,
   // plus a "plan" describing how to stitch the translated results back together.
   function chunkHtmlForTranslation(html, maxChars) {
@@ -738,38 +811,16 @@ Mystery Box</textarea>
 
     topNodes.forEach((node, idx) => {
       const len = nodeOuterLength(node);
+      const innerTable = (node.nodeType === 1 && len > WRAPPER_TABLE_SPLIT_CHARS)
+        ? node.querySelector(':scope > table')
+        : null;
 
       if (node.nodeType === 1 && node.tagName === 'TABLE' && len > maxChars) {
         flushPlain();
-        const theadEl = node.querySelector(':scope > thead');
-        const tbodyEl = node.querySelector(':scope > tbody');
-        const rows = tbodyEl ? Array.from(tbodyEl.children) : Array.from(node.querySelectorAll(':scope > tr'));
-        const tableOpenAttrs = node.cloneNode(false).outerHTML; // e.g. <table class="...">...</table> (empty)
-        const tableId = 'tbl-' + idx + '-' + Math.random().toString(36).slice(2, 7);
-
-        let group = [];
-        let groupLen = theadEl ? theadEl.outerHTML.length : 0;
-        let isFirstGroup = true;
-        function pushGroup() {
-          if (!group.length) return;
-          const tbl = document.createElement('table');
-          if (isFirstGroup && theadEl) tbl.appendChild(theadEl.cloneNode(true));
-          const tbody = document.createElement('tbody');
-          group.forEach(r => tbody.appendChild(r.cloneNode(true)));
-          tbl.appendChild(tbody);
-          chunks.push(tbl.outerHTML);
-          plan.push({ type: 'tableRows', tableId, isFirst: isFirstGroup, tableOpenAttrs });
-          isFirstGroup = false;
-          group = [];
-          groupLen = 0;
-        }
-        rows.forEach(row => {
-          const rLen = row.outerHTML.length;
-          if (groupLen + rLen > maxChars && group.length) pushGroup();
-          group.push(row);
-          groupLen += rLen;
-        });
-        pushGroup();
+        splitTableRows(node, maxChars, idx, chunks, plan);
+      } else if (innerTable) {
+        flushPlain();
+        splitWrapperWithTable(node, innerTable, maxChars, idx, chunks, plan);
       } else if (currentLen + len > maxChars && current.length) {
         flushPlain();
         current.push(node);
@@ -791,6 +842,18 @@ Mystery Box</textarea>
       const p = plan[i];
       if (p.type === 'plain') {
         out += translatedChunks[i];
+        i++;
+        continue;
+      }
+      if (p.type === 'wrapperPrefix') {
+        const t = translatedChunks[i] || '';
+        out += t.replace(new RegExp('</' + p.tagName + '>\\s*$', 'i'), '');
+        i++;
+        continue;
+      }
+      if (p.type === 'wrapperSuffix') {
+        const t = translatedChunks[i] || '';
+        out += t.replace(new RegExp('^\\s*<' + p.tagName + '\\b[^>]*>', 'i'), '');
         i++;
         continue;
       }
@@ -1096,6 +1159,14 @@ Mystery Box</textarea>
         const finishReason = candidate && candidate.finishReason;
         const parts = (candidate && candidate.content && candidate.content.parts) || [];
         const textOut = parts.map(p => p.text || '').join('');
+
+        if (finishReason === 'MAX_TOKENS') {
+          // Gemini cut its reply short mid-generation - the chunk we sent was too large for
+          // one response. NEVER cache/accept this (it would be broken/unclosed HTML), and use
+          // a message translateChunkAutoSplit recognizes so it automatically retries with the
+          // chunk split into smaller pieces instead of showing this raw error to the user.
+          throw new Error('Gemini took too long to respond and the reply was truncated (finishReason: MAX_TOKENS) - content likely too large for one request.');
+        }
 
         if (!textOut.trim()) {
           if (finishReason === 'SAFETY' || finishReason === 'RECITATION' || finishReason === 'PROHIBITED_CONTENT') {
