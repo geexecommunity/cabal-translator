@@ -42,7 +42,15 @@ exports.handler = async function (event) {
       body: JSON.stringify({
         system_instruction: { parts: [{ text: systemPrompt }] },
         contents: [{ role: 'user', parts: [{ text: input }] }],
-        generationConfig: { maxOutputTokens: 8192, temperature: 0.3, thinkingConfig: { thinkingBudget: 0 } },
+        // maxOutputTokens was 8192, which is easily exceeded by a big HTML table chunk (lots of
+        // rows, each repeating verbose inline styles) since the whole structure has to be
+        // echoed back. When that happened, Gemini silently cut the reply off mid-table,
+        // producing broken/unclosed HTML that visually corrupted the rest of the page. Both
+        // gemini-3.1-flash-lite and gemini-3.5-flash support up to 65536 output tokens, so we
+        // use that as a generous ceiling — it only raises the cutoff point, it doesn't slow
+        // down normal-sized responses. (If a chunk is so large it'd still take >25s to
+        // generate, Netlify's own timeout kicks in and the client auto-splits and retries.)
+        generationConfig: { maxOutputTokens: 65536, temperature: 0.3, thinkingConfig: { thinkingBudget: 0 } },
         // Default safety thresholds sometimes false-positive on ordinary MMORPG content
         // (combat/weapon/monster language in event captions, item names, etc.), especially
         // now that content is often split into small standalone chunks/paragraphs that lose
