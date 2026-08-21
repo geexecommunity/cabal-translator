@@ -789,15 +789,36 @@ Mystery Box</textarea>
     plan.push({ type: 'wrapperSuffix', tagName });
   }
 
-  // Splits an HTML fragment into an ordered list of chunk strings to send to the API,
-  // plus a "plan" describing how to stitch the translated results back together.
-  function chunkHtmlForTranslation(html, maxChars) {
-    const parser = new DOMParser();
-    const doc = parser.parseFromString(html, 'text/html');
-    const topNodes = Array.from(doc.body.childNodes);
-    const chunks = [];
-    const plan = [];
+  // Row-splits any oversized container element (that isn't itself a table and doesn't have
+  // a table as a direct child) by recursively descending into its own children with the
+  // exact same packing/splitting rules used at the top level. This is what lets a deeply
+  // nested "box of boxes" structure - e.g. a Cash Shop section containing several package
+  // divs, each with its own table - get fully broken down instead of being sent as one
+  // giant unsplittable chunk that reliably exceeds Gemini's response time. Reuses the same
+  // wrapperPrefix/wrapperSuffix reconstruction as splitWrapperWithTable above: the prefix
+  // and suffix pieces here just carry the tag itself (empty content), so reassembly can
+  // strip the redundant tag off each and rebuild exactly one instance of the original
+  // open/close pair around whatever middle pieces this recursion produces.
+  function splitOversizedWrapper(node, maxChars, idx, chunks, plan) {
+    const tagName = node.tagName.toLowerCase();
+    const openTag = node.cloneNode(false).outerHTML.replace(/<\/[^>]+>\s*$/i, '');
+    const closeTag = '</' + tagName + '>';
 
+    chunks.push(openTag + closeTag);
+    plan.push({ type: 'wrapperPrefix', tagName });
+
+    chunkNodeList(Array.from(node.childNodes), maxChars, idx, chunks, plan);
+
+    chunks.push(openTag + closeTag);
+    plan.push({ type: 'wrapperSuffix', tagName });
+  }
+
+  // Core packing logic shared by the top level (document body) and by
+  // splitOversizedWrapper's recursive descent into a large wrapper's children. Groups
+  // consecutive small nodes together up to maxChars, and hands anything too big on its own
+  // (a table, a wrapper with a direct table child, or - as a last resort - any other
+  // oversized element) off to the appropriate specialized splitter instead of giving up.
+  function chunkNodeList(nodes, maxChars, idx, chunks, plan) {
     let current = [];
     let currentLen = 0;
     function flushPlain() {
@@ -809,7 +830,8 @@ Mystery Box</textarea>
       }
     }
 
-    topNodes.forEach((node, idx) => {
+    nodes.forEach((node, i) => {
+      const nodeId = idx + '.' + i;
       const len = nodeOuterLength(node);
       const innerTable = (node.nodeType === 1 && len > WRAPPER_TABLE_SPLIT_CHARS)
         ? node.querySelector(':scope > table')
@@ -817,10 +839,13 @@ Mystery Box</textarea>
 
       if (node.nodeType === 1 && node.tagName === 'TABLE' && len > maxChars) {
         flushPlain();
-        splitTableRows(node, maxChars, idx, chunks, plan);
+        splitTableRows(node, maxChars, nodeId, chunks, plan);
       } else if (innerTable) {
         flushPlain();
-        splitWrapperWithTable(node, innerTable, maxChars, idx, chunks, plan);
+        splitWrapperWithTable(node, innerTable, maxChars, nodeId, chunks, plan);
+      } else if (node.nodeType === 1 && len > WRAPPER_TABLE_SPLIT_CHARS && node.childNodes.length) {
+        flushPlain();
+        splitOversizedWrapper(node, maxChars, nodeId, chunks, plan);
       } else if (currentLen + len > maxChars && current.length) {
         flushPlain();
         current.push(node);
@@ -831,7 +856,16 @@ Mystery Box</textarea>
       }
     });
     flushPlain();
+  }
 
+  // Splits an HTML fragment into an ordered list of chunk strings to send to the API,
+  // plus a "plan" describing how to stitch the translated results back together.
+  function chunkHtmlForTranslation(html, maxChars) {
+    const parser = new DOMParser();
+    const doc = parser.parseFromString(html, 'text/html');
+    const chunks = [];
+    const plan = [];
+    chunkNodeList(Array.from(doc.body.childNodes), maxChars, 'top', chunks, plan);
     return { chunks, plan };
   }
 
