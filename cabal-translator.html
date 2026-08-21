@@ -704,7 +704,7 @@ Mystery Box</textarea>
   // account), so every extra chunk = one more request burned from that tiny budget.
   // Keep chunks as large as safely possible (well under Netlify's ~25s function
   // timeout) to minimize how many requests one translation needs.
-  const MAX_CHUNK_CHARS = 6000;
+  const MAX_CHUNK_CHARS = 3000;
 
   function serializeNodes(nodes) {
     const div = document.createElement('div');
